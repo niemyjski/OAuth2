@@ -59,6 +59,22 @@ namespace OAuth2.Models
         public string? Email { get; set; }
 
         /// <summary>
+        /// Whether the provider reports the email address as verified, or null when no valid verification claim is available.
+        /// </summary>
+        /// <remarks>
+        /// Provider verification alone does not authorize linking to an existing local account.
+        /// </remarks>
+        public bool? EmailVerified { get; set; }
+
+        /// <summary>
+        /// Hosted domain reported by the provider, or null when no valid hosted-domain claim is available.
+        /// </summary>
+        /// <remarks>
+        /// This value does not by itself establish email verification or authority over the email address.
+        /// </remarks>
+        public string? HostedDomain { get; set; }
+
+        /// <summary>
         /// First name.
         /// </summary>
         public string? FirstName { get; set; }

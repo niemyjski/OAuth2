@@ -74,6 +74,17 @@ app.MapGet("/auth/google/callback", async (HttpContext context) =>
 app.Run();
 ```
 
+## Google email claims and account linking
+
+`GoogleClient` preserves the userinfo response's `email_verified` and `hd` claims in `UserInfo`:
+
+- `EmailVerified` is a nullable boolean. JSON `true` and `false` are preserved; missing, null, or non-boolean values produce `null`.
+- `HostedDomain` contains the `hd` string unchanged; missing, null, or non-string values produce `null`. It is not inferred from the email address.
+
+These optional properties default to `null` for providers that do not populate them and when deserializing older `UserInfo` JSON. Existing fields retain their behavior; serialization includes the new properties according to the serializer's settings.
+
+Provider verification alone does not authorize automatic linking to an existing local account. Account linking remains the consuming application's policy. Use `ProviderName` and `Id` (Google's `sub`) to identify a provider account. A hosted-domain string alone does not establish email authority. See [Google's claim reference](https://developers.google.com/identity/openid-connect/reference) and [verification and account-linking guidance](https://developers.google.com/identity/gsi/web/guides/verify-google-id-token).
+
 ## Supported Services
 
 | Provider | Client Class | Status | API Version | Auth Endpoint | Last Verified | Docs |

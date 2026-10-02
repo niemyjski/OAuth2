@@ -91,6 +91,13 @@ namespace OAuth2.Client.Impl
             {
                 Id = response.GetProperty("sub").GetStringValue(),
                 Email = response.GetStringOrDefault("email"),
+                EmailVerified = response.TryGetProperty("email_verified", out var emailVerified)
+                    && (emailVerified.ValueKind == JsonValueKind.True || emailVerified.ValueKind == JsonValueKind.False)
+                    ? emailVerified.GetBoolean()
+                    : (bool?)null,
+                HostedDomain = response.TryGetProperty("hd", out var hostedDomain) && hostedDomain.ValueKind == JsonValueKind.String
+                    ? hostedDomain.GetString()
+                    : null,
                 FirstName = response.GetProperty("given_name").GetString(),
                 LastName = response.GetProperty("family_name").GetString(),
                 AvatarUri =

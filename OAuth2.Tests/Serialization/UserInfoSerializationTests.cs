@@ -85,8 +85,61 @@ namespace OAuth2.Tests.Serialization
 
             // assert
             root.GetProperty("Email").ValueKind.Should().Be(JsonValueKind.Null);
+            root.GetProperty("EmailVerified").ValueKind.Should().Be(JsonValueKind.Null);
+            root.GetProperty("HostedDomain").ValueKind.Should().Be(JsonValueKind.Null);
             root.GetProperty("FirstName").ValueKind.Should().Be(JsonValueKind.Null);
             root.GetProperty("LastName").ValueKind.Should().Be(JsonValueKind.Null);
+        }
+
+        [TestCase(true, "example.com")]
+        [TestCase(false, "example.com")]
+        [TestCase(null, null)]
+        [TestCase(true, null)]
+        public void Roundtrip_UserInfoClaims_PreservesVerificationAndHostedDomain(bool? emailVerified, string? hostedDomain)
+        {
+            var original = new UserInfo
+            {
+                Id = "user-123",
+                ProviderName = "Google",
+                Email = "test@example.com",
+                EmailVerified = emailVerified,
+                HostedDomain = hostedDomain
+            };
+
+            var json = JsonSerializer.Serialize(original, Options);
+            using var doc = JsonDocument.Parse(json);
+            var root = doc.RootElement;
+            var deserialized = JsonSerializer.Deserialize<UserInfo>(json, Options);
+
+            if (emailVerified.HasValue)
+                root.GetProperty("EmailVerified").GetBoolean().Should().Be(emailVerified.Value);
+            else
+                root.GetProperty("EmailVerified").ValueKind.Should().Be(JsonValueKind.Null);
+
+            root.GetProperty("HostedDomain").GetString().Should().Be(hostedDomain);
+            deserialized.Should().NotBeNull();
+            deserialized!.Id.Should().Be(original.Id);
+            deserialized.ProviderName.Should().Be(original.ProviderName);
+            deserialized.Email.Should().Be(original.Email);
+            deserialized.EmailVerified.Should().Be(emailVerified);
+            deserialized.HostedDomain.Should().Be(original.HostedDomain);
+        }
+
+        [Test]
+        public void Deserialize_LegacyUserInfo_DefaultsNewClaimsToNull()
+        {
+            const string json = "{\"Id\":\"user-123\",\"ProviderName\":\"Google\",\"Email\":\"test@example.com\",\"FirstName\":\"John\",\"LastName\":\"Doe\"}";
+
+            var info = JsonSerializer.Deserialize<UserInfo>(json, Options);
+
+            info.Should().NotBeNull();
+            info!.Id.Should().Be("user-123");
+            info.ProviderName.Should().Be("Google");
+            info.Email.Should().Be("test@example.com");
+            info.FirstName.Should().Be("John");
+            info.LastName.Should().Be("Doe");
+            info.EmailVerified.Should().BeNull();
+            info.HostedDomain.Should().BeNull();
         }
 
         [Test]

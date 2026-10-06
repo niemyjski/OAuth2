@@ -76,16 +76,20 @@ app.Run();
 
 ## Email verification and provider-specific data
 
-`UserInfo.EmailVerified` is an optional, provider-reported verification status: `true`, `false`, or `null` when unknown or not mapped by the client. Email verification is an [OpenID Connect standard claim](https://openid.net/specs/openid-connect-core-1_0.html#StandardClaims), not a Google-specific concept; [LinkedIn also documents it](https://learn.microsoft.com/en-us/linkedin/consumer/integrations/self-serve/sign-in-with-linkedin-v2). Providers can use different verification methods, so a shared property does not imply identical assurance across providers.
+`UserInfo.EmailVerified` is an optional, provider-reported verification status: `true`, `false`, or `null` when unknown or not mapped by the client. Email verification is an [OpenID Connect standard claim](https://openid.net/specs/openid-connect-core-1_0.html#StandardClaims), not a Google-specific concept. Providers can use different verification methods, so a shared property does not imply identical assurance across providers.
 
-Provider-specific string values belong in the optional `UserInfo.ProviderData` dictionary. Interpret its keys together with `ProviderName`; they are not universal claims. This dictionary contains only values explicitly mapped by a client, not the complete provider response, arbitrary JSON objects, or tokens. There is no shared `HostedDomain` property.
+| Client | Source of `EmailVerified` | Scope of support |
+|--------|---------------------------|------------------|
+| `GoogleClient` | `email_verified` in userinfo | Only JSON booleans; absent, null, or non-boolean claims produce null. |
+| `LinkedInClient` | `email_verified` in `/v2/userinfo` | Same strict, nullable handling of the optional claim. |
+| `SalesforceClient` | `email_verified` in the identity URL response | Same strict, nullable handling; the existing identity URL and user ID are preserved. |
+| `GitHubClient` | `verified` on the selected `/user/emails` record | Preserves the existing private-email fallback and selection order. A public profile email alone leaves verification unknown; no extra request or permission is added. |
 
-Currently, `GoogleClient` maps the following values from its userinfo response:
+GitHub verification belongs to the selected address, not any other verified address in the response. Its existing typed email parser and protected `bool Verified` API remain compatible; omitted verification is distinguished from explicitly false. See the [provider-claims reference](docs/provider-claims.md) for endpoint documentation, malformed-value behavior, and providers whose API support requires a separate migration. Clients not listed above leave `EmailVerified` null.
 
-- `email_verified` maps to `EmailVerified`. Only JSON booleans are accepted; absent, null, or non-boolean values produce `null`.
-- `hd` maps to `ProviderData["hd"]`. Only strings are accepted and their contents are preserved unchanged, including case, whitespace, and empty strings. An absent, null, or non-string claim leaves `ProviderData` null. This is Google's hosted-domain claim, not a generic tenant identifier or a domain inferred from the email address.
+Provider-specific string values belong in the optional `UserInfo.ProviderData` dictionary. Interpret its keys together with `ProviderName`; they are not universal claims. The built-in clients copy only explicitly mapped values, not complete provider responses, arbitrary JSON objects, or tokens. There is no shared `HostedDomain` property.
 
-The other clients do not yet populate these new properties and leave them null. Google also permits missing `given_name` and `family_name`; these become null without discarding the remaining user information. See [Google's userinfo claim reference](https://developers.google.com/identity/openid-connect/reference#userinfo).
+`GoogleClient` maps only a string-valued `hd` claim to `ProviderData["hd"]`, preserving its contents unchanged, including case, whitespace, and empty strings. An absent, null, or non-string claim leaves `ProviderData` null. This is Google's hosted-domain claim, not a generic tenant identifier or a domain inferred from the email address. Other built-in clients leave `ProviderData` null. Google also permits missing `given_name` and `family_name`; these become null without discarding the remaining user information. See [Google's userinfo claim reference](https://developers.google.com/identity/openid-connect/reference#userinfo).
 
 Read Google's hosted domain explicitly in its provider context:
 
@@ -122,7 +126,7 @@ Older serialized `UserInfo` objects deserialize with both new properties null. E
 | Odnoklassniki | `OdnoklassnikiClient` | Active | OAuth 2.0 | `www.odnoklassniki.ru/oauth/authorize` | 2026-04-23 | [Docs](https://apiok.ru/en/ext/oauth/) |
 | Salesforce | `SalesforceClient` | Active | OAuth 2.0 (Web Server Flow) | `login.salesforce.com/services/oauth2/authorize` | 2026-04-23 | [Docs](https://help.salesforce.com/s/articleView?id=sf.remoteaccess_oauth_web_server_flow.htm) |
 | Spotify | `SpotifyClient` | Active | Web API v1 | `accounts.spotify.com/authorize` | 2026-04-23 | [Docs](https://developer.spotify.com/documentation/web-api/tutorials/code-flow) |
-| Todoist | `TodoistClient` | Active | REST API v1 | `accounts.todoist.com/oauth/authorize` | 2026-04-23 | [Docs](https://developer.todoist.com/api/v1/) |
+| Todoist | `TodoistClient` | Active | REST API v1 | `app.todoist.com/oauth/authorize` | 2026-04-23 | [Docs](https://developer.todoist.com/api/v1/) |
 | X (Twitter) | `XClient` | Active | OAuth 1.0a / API v1.1 | `api.twitter.com/oauth/authenticate` | 2026-04-23 | [Docs](https://developer.x.com/en/docs/authentication/oauth-1-0a) |
 | Uber | `UberClient` | Active | OAuth v2 | `auth.uber.com/oauth/v2/authorize` | 2026-04-23 | [Docs](https://developer.uber.com/docs/riders/guides/authentication/introduction) |
 | VK (Vkontakte) | `VkClient` | Active | API v5.131 | `oauth.vk.com/authorize` | 2026-04-23 | [Docs](https://dev.vk.com/en/api/access-token/authcode-flow-user) |

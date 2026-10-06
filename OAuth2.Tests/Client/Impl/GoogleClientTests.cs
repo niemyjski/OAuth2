@@ -1,3 +1,4 @@
+using System.Text.Json;
 using FluentAssertions;
 using NSubstitute;
 using NUnit.Framework;
@@ -51,50 +52,17 @@ namespace OAuth2.Tests.Client.Impl
             endpoint.Resource.Should().Be("/token");
         }
 
-        [Test]
-        public void UserInfoEndpoint_Default_ReturnsCorrectEndpoint()
-        {
-            // arrange
-
-            // act
-            var endpoint = _descendant.GetUserInfoServiceEndpoint();
-
-            // assert
-            endpoint.BaseUri.Should().Be("https://www.googleapis.com");
-            endpoint.Resource.Should().Be("/oauth2/v3/userinfo");
-        }
-
-        [Test]
-        public void ParseUserInfo_NoPicture_DoesNotThrow()
-        {
-            // arrange (uses Content const without picture)
-
-            // act & assert
-            _descendant.Invoking(x => x.ParseUserInfo(Content)).Should().NotThrow();
-        }
-
-        [Test]
-        public void ParseUserInfo_ValidContent_ReturnsCorrectFields()
-        {
-            // arrange (uses ContentWithPicture const)
-
-            // act
-            var info = _descendant.ParseUserInfo(ContentWithPicture);
-
-            // assert
-            info.Id.Should().Be("id");
-            info.FirstName.Should().Be("name");
-            info.LastName.Should().Be("surname");
-            info.Email.Should().Be("email");
-            info.PhotoUri.Should().Be("picture");
-        }
-
         [TestCase("true", true)]
         [TestCase("false", false)]
-        public void ParseUserInfo_BooleanEmailVerified_PreservesClaim(string claim, bool expected)
+        public void ParseUserInfo_BooleanEmailVerifiedWithHostedDomain_PreservesClaim(string claim, bool expected)
         {
-            var info = _descendant.ParseUserInfo(ContentWithClaims($"\"email_verified\":{claim},\"hd\":\"example.com\""));
+            // arrange
+            var content = ContentWithClaims($"\"email_verified\":{claim},\"hd\":\"example.com\"");
 
+            // act
+            var info = _descendant.ParseUserInfo(content);
+
+            // assert
             info.EmailVerified.Should().Be(expected);
             info.HostedDomain.Should().Be("example.com");
             info.Email.Should().Be("email");
@@ -104,17 +72,96 @@ namespace OAuth2.Tests.Client.Impl
         [TestCase("false", false)]
         public void ParseUserInfo_BooleanEmailVerifiedWithoutHostedDomain_PreservesClaim(string claim, bool expected)
         {
-            var info = _descendant.ParseUserInfo(ContentWithClaims($"\"email_verified\":{claim}"));
+            // arrange
+            var content = ContentWithClaims($"\"email_verified\":{claim}");
 
+            // act
+            var info = _descendant.ParseUserInfo(content);
+
+            // assert
             info.EmailVerified.Should().Be(expected);
+            info.HostedDomain.Should().BeNull();
+        }
+
+        [Test]
+        public void ParseUserInfo_ClaimsWithoutEmail_PreservesClaims()
+        {
+            // arrange
+            /* lang=json */
+            const string content = "{\"given_name\":\"name\",\"family_name\":\"surname\",\"sub\":\"id\",\"email_verified\":true,\"hd\":\"example.com\"}";
+
+            // act
+            var info = _descendant.ParseUserInfo(content);
+
+            // assert
+            info.Id.Should().Be("id");
+            info.Email.Should().BeNull();
+            info.EmailVerified.Should().BeTrue();
+            info.HostedDomain.Should().Be("example.com");
+        }
+
+        [Test]
+        public void ParseUserInfo_ClaimsWithoutPicture_PreservesClaims()
+        {
+            // arrange
+            /* lang=json */
+            const string content = "{\"email\":\"email\",\"given_name\":\"name\",\"family_name\":\"surname\",\"sub\":\"id\",\"email_verified\":false,\"hd\":\"example.com\"}";
+
+            // act
+            var info = _descendant.ParseUserInfo(content);
+
+            // assert
+            info.Email.Should().Be("email");
+            info.EmailVerified.Should().BeFalse();
+            info.HostedDomain.Should().Be("example.com");
+            info.PhotoUri.Should().BeNull();
+            info.AvatarUri.Small.Should().BeEmpty();
+            info.AvatarUri.Large.Should().BeEmpty();
+        }
+
+        [TestCase("EMAIL_VERIFIED", "HD")]
+        [TestCase("Email_Verified", "Hd")]
+        public void ParseUserInfo_DifferentlyCasedClaims_DoesNotRecognizeClaims(string emailVerifiedName, string hostedDomainName)
+        {
+            // arrange
+            var content = ContentWithClaims($"\"{emailVerifiedName}\":true,\"{hostedDomainName}\":\"example.com\"");
+
+            // act
+            var info = _descendant.ParseUserInfo(content);
+
+            // assert
+            info.EmailVerified.Should().BeNull();
+            info.HostedDomain.Should().BeNull();
+            info.Id.Should().Be("id");
+            info.Email.Should().Be("email");
+        }
+
+        [TestCase("user@gmail.com")]
+        [TestCase("user@example.com")]
+        public void ParseUserInfo_EmailDomain_DoesNotInferClaims(string email)
+        {
+            // arrange
+            var content = ContentWithPicture.Replace("\"email\":\"email\"", $"\"email\":\"{email}\"");
+
+            // act
+            var info = _descendant.ParseUserInfo(content);
+
+            // assert
+            info.Email.Should().Be(email);
+            info.EmailVerified.Should().BeNull();
             info.HostedDomain.Should().BeNull();
         }
 
         [Test]
         public void ParseUserInfo_MissingClaims_ReturnsNull()
         {
-            var info = _descendant.ParseUserInfo(ContentWithPicture);
+            // arrange
+            var content = ContentWithPicture;
 
+            // act
+            var info = _descendant.ParseUserInfo(content);
+
+            // assert
             info.EmailVerified.Should().BeNull();
             info.HostedDomain.Should().BeNull();
         }
@@ -130,24 +177,17 @@ namespace OAuth2.Tests.Client.Impl
         [TestCase("[]")]
         public void ParseUserInfo_NonBooleanEmailVerified_ReturnsNull(string claim)
         {
-            var info = _descendant.ParseUserInfo(ContentWithClaims($"\"email_verified\":{claim},\"hd\":\"example.com\""));
+            // arrange
+            var content = ContentWithClaims($"\"email_verified\":{claim},\"hd\":\"example.com\"");
 
+            // act
+            var info = _descendant.ParseUserInfo(content);
+
+            // assert
             info.EmailVerified.Should().BeNull();
             info.HostedDomain.Should().Be("example.com");
             info.Email.Should().Be("email");
             info.PhotoUri.Should().Be("picture");
-        }
-
-        [TestCase("example.com")]
-        [TestCase("Example.COM")]
-        [TestCase("")]
-        [TestCase(" example.com ")]
-        public void ParseUserInfo_StringHostedDomain_PreservesClaimWithoutInferringVerification(string domain)
-        {
-            var info = _descendant.ParseUserInfo(ContentWithClaims($"\"hd\":\"{domain}\""));
-
-            info.HostedDomain.Should().Be(domain);
-            info.EmailVerified.Should().BeNull();
         }
 
         [TestCase("null")]
@@ -158,22 +198,81 @@ namespace OAuth2.Tests.Client.Impl
         [TestCase("[]")]
         public void ParseUserInfo_NonStringHostedDomain_ReturnsNull(string claim)
         {
-            var info = _descendant.ParseUserInfo(ContentWithClaims($"\"email_verified\":true,\"hd\":{claim}"));
+            // arrange
+            var content = ContentWithClaims($"\"email_verified\":true,\"hd\":{claim}");
 
+            // act
+            var info = _descendant.ParseUserInfo(content);
+
+            // assert
             info.HostedDomain.Should().BeNull();
             info.EmailVerified.Should().BeTrue();
             info.Email.Should().Be("email");
         }
 
-        [TestCase("user@gmail.com")]
-        [TestCase("user@example.com")]
-        public void ParseUserInfo_EmailDomain_DoesNotInferClaims(string email)
+        [Test]
+        public void ParseUserInfo_NoPicture_DoesNotThrow()
         {
-            var info = _descendant.ParseUserInfo(ContentWithPicture.Replace("\"email\":\"email\"", $"\"email\":\"{email}\""));
+            // arrange
+            var content = Content;
 
-            info.Email.Should().Be(email);
+            // act
+            var info = _descendant.ParseUserInfo(content);
+
+            // assert
+            info.Should().NotBeNull();
+            info.PhotoUri.Should().BeNull();
             info.EmailVerified.Should().BeNull();
             info.HostedDomain.Should().BeNull();
+        }
+
+        [TestCase("example.com")]
+        [TestCase("Example.COM")]
+        [TestCase("")]
+        [TestCase(" example.com ")]
+        [TestCase("\"example.com\"")]
+        [TestCase("example\\domain")]
+        public void ParseUserInfo_StringHostedDomain_PreservesClaimWithoutInferringVerification(string domain)
+        {
+            // arrange
+            var content = ContentWithClaims($"\"hd\":{JsonSerializer.Serialize(domain)}");
+
+            // act
+            var info = _descendant.ParseUserInfo(content);
+
+            // assert
+            info.HostedDomain.Should().Be(domain);
+            info.EmailVerified.Should().BeNull();
+        }
+
+        [Test]
+        public void ParseUserInfo_ValidContent_ReturnsCorrectFields()
+        {
+            // arrange
+            var content = ContentWithPicture;
+
+            // act
+            var info = _descendant.ParseUserInfo(content);
+
+            // assert
+            info.Id.Should().Be("id");
+            info.FirstName.Should().Be("name");
+            info.LastName.Should().Be("surname");
+            info.Email.Should().Be("email");
+            info.PhotoUri.Should().Be("picture");
+        }
+
+        [Test]
+        public void UserInfoEndpoint_Default_ReturnsCorrectEndpoint()
+        {
+            // arrange
+
+            // act
+            var endpoint = _descendant.GetUserInfoServiceEndpoint();
+
+            // assert
+            endpoint.BaseUri.Should().Be("https://www.googleapis.com");
+            endpoint.Resource.Should().Be("/oauth2/v3/userinfo");
         }
 
         private static string ContentWithClaims(string claims)

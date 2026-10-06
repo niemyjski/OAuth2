@@ -31,15 +31,48 @@ GitHub's existing typed, case-insensitive email deserialization remains in place
 
 ## API support that requires separate endpoint work
 
-The following providers document email verification, but their currently implemented client paths do not consume that response. They are not classified as providers that lack email verification.
+The following providers document email verification, but their currently implemented client paths do not consume that response. They are not classified as providers that lack email verification. The migrations below are not implemented by this PR.
 
 | Provider | Documented capability | Why this change leaves it unmapped |
 |----------|-----------------------|------------------------------------|
-| DigitalOcean | `/v2/account` returns `account.email_verified`; the reference specifies `account:read`. [Account API](https://docs.digitalocean.com/reference/api/reference/account/). | The client currently parses the token response's `uid` and `info`, without an account API request. Adding a request must address permission availability, user/team identity association, and backward compatibility. [Current OAuth response](https://docs.digitalocean.com/reference/api/oauth/). |
-| Uber | `/v3/me` documents boolean `email_verified`, subject to endpoint access approval and profile permissions. [Current user endpoint](https://developer.uber.com/docs/consumer-identity/references/api/v3/me-get). | The client calls `/v1/me`, whose `mobile_verified` describes a phone, not an email. A migration must cover endpoint access and changed identity/profile fields, not just add a property assignment. [Legacy endpoint](https://developer.uber.com/docs/riders/references/api/v1/me-get). |
-| Yahoo | `/openid/v1/userinfo` documents `email_verified`. [Sign In With Yahoo](https://developer.yahoo.com/sign-in-with-yahoo/). | The client uses the Social Directory profile response and `xoauth_yahoo_guid`. Migration must verify scopes and identifier continuity. Yahoo documents the [Social Directory API shutdown](https://developer.yahoo.com/oauth/social-directory-eol/); parsing a new field does not repair that integration. |
+| DigitalOcean | `/v2/account` returns `account.email_verified`; the reference specifies `account:read`. [Account API](https://docs.digitalocean.com/reference/api/reference/account/). | The client parses the token response's `uid` and `info`, without an account API request. The [current token example](https://docs.digitalocean.com/reference/api/oauth/#response) instead shows `info.uuid` and omits `uid`; their equivalence is not established here. |
+| Uber | `/v3/me` documents boolean `email_verified`, subject to endpoint access approval and profile permissions. [Current user endpoint](https://developer.uber.com/docs/consumer-identity/references/api/v3/me-get). | The client calls deprecated `/v1/me`. Approval for the replacement and identity/profile compatibility must be verified. [Legacy endpoint](https://developer.uber.com/docs/riders/references/api/v1/me-get). |
+| Yahoo | `/openid/v1/userinfo` documents `email_verified`. [Sign In With Yahoo](https://developer.yahoo.com/sign-in-with-yahoo/). | Yahoo documents GUID-to-`sub` compatibility and continued legacy-scope support, but also a changed profile response. The existing client still parses Social Directory data. [Migration guide](https://developer.yahoo.com/oauth/social-directory-eol/). |
 
-No endpoint migration, additional permission, or new network request is introduced for these clients here.
+No endpoint migration, additional permission, or new network request is introduced for these clients here. Passing mocked tests is not evidence of live endpoint access, effective permissions, or compatibility with a consumer's stored account identifiers.
+
+### DigitalOcean: resolve identity and permission contracts first
+
+The [account schema](https://docs.digitalocean.com/reference/api/reference/account/) distinguishes the current user's `account.uuid` from `account.team.uuid`. Only the user's email-verification value could describe the returned user email; the team identifier is not a hosted domain or an alternative user identifier.
+
+The current parser unconditionally calls `GetProperty("uid")`. Consequently, a response shaped exactly like the current documented OAuth token example fails at that lookup. This is a pre-existing response-contract mismatch, not evidence that every live grant omits the old field. No documentation establishing a conversion from legacy `uid` to the newer UUID was found in this review.
+
+Before migration, establish the relationship to persisted IDs and verify the granted account-read permission. Define the behavior of the extra account request for permission denial, rate limiting, cancellation, and service failure. Do not silently replace an existing ID or attach verification to a different email record.
+
+### Uber: approval and response changes prevent a blanket upgrade
+
+The [v3 reference](https://developer.uber.com/docs/consumer-identity/references/api/v3/me-get) explicitly requires Uber approval. Its response uses `given_name`, `family_name`, and an encrypted `sub`; the current parser reads `first_name` and `last_name` and does not populate `UserInfo.Id`. Changing only the request URL would therefore lose name fields and would not implement the new identity contract.
+
+The reference associates `email_verified` with `profile`, but its profile-only example omits the value. Treat absence as unknown; do not infer verification from an email, phone verification, or verification timestamps. Approval and effective grants must be confirmed for the actual application before a migration is enabled.
+
+### Yahoo: documented migration candidate, not a transparent replacement
+
+Yahoo's [migration guide](https://developer.yahoo.com/oauth/social-directory-eol/) sets the old service's end of life at June 30, 2020. It maps `guid` to `sub`, confirms legacy scopes remain applicable, and changes the email array into one preferred email. Basic and extended legacy scopes return different fields. This resolves the provider's documented identity mapping, but not all consumer compatibility questions.
+
+The live [discovery document](https://api.login.yahoo.com/.well-known/openid-configuration) confirms the userinfo URL, public subject type, `openid`/`profile`/`email` scopes, and both `client_secret_basic` and `client_secret_post`. The [sign-in guide](https://developer.yahoo.com/sign-in-with-yahoo/) documents deprecation of `xoauth_yahoo_guid`; a new implementation must not depend on it being present or decode an unvalidated ID token as a substitute.
+
+A migration needs a flat-profile parser, strict nullable email verification, optional-field and avatar mapping, and compatibility coverage for the public `UserProfileGUID` property and protected overrides. Check stored GUIDs against authenticated userinfo subjects; reject any contradictory supplied identities rather than linking by email. Explicitly document required grants and changes in returned data. Do not silently add broader scopes.
+
+### Acceptance criteria for a separate migration
+
+Use an explicitly selected client or a versioned migration with compatibility notes when the existing behavior cannot be retained. Before release:
+
+1. Verify authenticated responses with an application that has the required provider approval and grants. Compare subjects with existing stored identities or historical records, not just synthetic examples; do not expect Yahoo's retired endpoint to supply a live baseline.
+2. Exercise minimum permissions, legacy grants where supported, absent email/verification, false verification, malformed claims, contradictory identities, and personal/team contexts where relevant.
+3. Test exact request origins, paths, Bearer headers, request counts, scope preservation, cancellation, and error behavior. Never leak tokens into provider metadata, URLs, or diagnostic exceptions.
+4. Cover the public DTO and protected extension points, serialization behavior, and repeat-call state isolation. Build every target and execute the relevant test matrix with alphabetically ordered three-part test names and separate Arrange, Act, and Assert sections.
+
+These are release gates, not completed validation claims. No live authorized provider sessions or consumer account databases were used in this assessment. None of the reviewed replacement contracts establishes a common hosted-domain claim that should be promoted into `UserInfo`.
 
 ## Values deliberately not treated as email verification
 

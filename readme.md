@@ -74,16 +74,34 @@ app.MapGet("/auth/google/callback", async (HttpContext context) =>
 app.Run();
 ```
 
-## Google email claims and account linking
+## Email verification and provider-specific data
 
-`GoogleClient` preserves the userinfo response's `email_verified` and `hd` claims in `UserInfo`:
+`UserInfo.EmailVerified` is an optional, provider-reported verification status: `true`, `false`, or `null` when unknown or not mapped by the client. Email verification is an [OpenID Connect standard claim](https://openid.net/specs/openid-connect-core-1_0.html#StandardClaims), not a Google-specific concept; [LinkedIn also documents it](https://learn.microsoft.com/en-us/linkedin/consumer/integrations/self-serve/sign-in-with-linkedin-v2). Providers can use different verification methods, so a shared property does not imply identical assurance across providers.
 
-- `EmailVerified` is a nullable boolean. JSON `true` and `false` are preserved; missing, null, or non-boolean values produce `null`.
-- `HostedDomain` contains the `hd` string unchanged; missing, null, or non-string values produce `null`. It is not inferred from the email address.
+Provider-specific string values belong in the optional `UserInfo.ProviderData` dictionary. Interpret its keys together with `ProviderName`; they are not universal claims. This dictionary contains only values explicitly mapped by a client, not the complete provider response, arbitrary JSON objects, or tokens. There is no shared `HostedDomain` property.
 
-These optional properties default to `null` for providers that do not populate them and when deserializing older `UserInfo` JSON. Existing fields retain their behavior; serialization includes the new properties according to the serializer's settings.
+Currently, `GoogleClient` maps the following values from its userinfo response:
 
-Provider verification alone does not authorize automatic linking to an existing local account. Account linking remains the consuming application's policy. Use `ProviderName` and `Id` (Google's `sub`) to identify a provider account. A hosted-domain string alone does not establish email authority. See [Google's claim reference](https://developers.google.com/identity/openid-connect/reference) and [verification and account-linking guidance](https://developers.google.com/identity/gsi/web/guides/verify-google-id-token).
+- `email_verified` maps to `EmailVerified`. Only JSON booleans are accepted; absent, null, or non-boolean values produce `null`.
+- `hd` maps to `ProviderData["hd"]`. Only strings are accepted and their contents are preserved unchanged, including case, whitespace, and empty strings. An absent, null, or non-string claim leaves `ProviderData` null. This is Google's hosted-domain claim, not a generic tenant identifier or a domain inferred from the email address.
+
+The other clients do not yet populate these new properties and leave them null. Google also permits missing `given_name` and `family_name`; these become null without discarding the remaining user information. See [Google's userinfo claim reference](https://developers.google.com/identity/openid-connect/reference#userinfo).
+
+Read Google's hosted domain explicitly in its provider context:
+
+```csharp
+string? googleHostedDomain = null;
+if (userInfo.ProviderName == "Google" &&
+    userInfo.ProviderData != null &&
+    userInfo.ProviderData.TryGetValue("hd", out var hostedDomain))
+{
+    googleHostedDomain = hostedDomain;
+}
+```
+
+This reads metadata; it does not authorize access or link an account. A correctly typed string is not a validated or approved domain. Use `ProviderName` and `Id` (Google's `sub`) to identify a provider account, and apply an explicit application policy for account linking and domain restrictions. Google's authority over an email address depends on the account type; an external email address can remain marked verified even after ownership changes. A hosted-domain string alone does not establish email authority. See [Google's verification guidance](https://developers.google.com/identity/gsi/web/guides/verify-google-id-token). Preserving userinfo claims does not add ID-token validation or an automatic account-linking flow.
+
+Older serialized `UserInfo` objects deserialize with both new properties null. Existing properties remain available; serialization includes the new properties according to the serializer's naming and null/default settings. With default `System.Text.Json` options, they appear as `EmailVerified` and `ProviderData`, including null values. Provider data stays nested rather than being flattened into the shared model. No provider-specific subclass or polymorphic serializer configuration is required; dictionary-key policies remain the consuming application's responsibility.
 
 ## Supported Services
 
@@ -104,7 +122,7 @@ Provider verification alone does not authorize automatic linking to an existing 
 | Odnoklassniki | `OdnoklassnikiClient` | Active | OAuth 2.0 | `www.odnoklassniki.ru/oauth/authorize` | 2026-04-23 | [Docs](https://apiok.ru/en/ext/oauth/) |
 | Salesforce | `SalesforceClient` | Active | OAuth 2.0 (Web Server Flow) | `login.salesforce.com/services/oauth2/authorize` | 2026-04-23 | [Docs](https://help.salesforce.com/s/articleView?id=sf.remoteaccess_oauth_web_server_flow.htm) |
 | Spotify | `SpotifyClient` | Active | Web API v1 | `accounts.spotify.com/authorize` | 2026-04-23 | [Docs](https://developer.spotify.com/documentation/web-api/tutorials/code-flow) |
-| Todoist | `TodoistClient` | Active | REST API v1 | `app.todoist.com/oauth/authorize` | 2026-04-23 | [Docs](https://developer.todoist.com/api/v1/) |
+| Todoist | `TodoistClient` | Active | REST API v1 | `accounts.todoist.com/oauth/authorize` | 2026-04-23 | [Docs](https://developer.todoist.com/api/v1/) |
 | X (Twitter) | `XClient` | Active | OAuth 1.0a / API v1.1 | `api.twitter.com/oauth/authenticate` | 2026-04-23 | [Docs](https://developer.x.com/en/docs/authentication/oauth-1-0a) |
 | Uber | `UberClient` | Active | OAuth v2 | `auth.uber.com/oauth/v2/authorize` | 2026-04-23 | [Docs](https://developer.uber.com/docs/riders/guides/authentication/introduction) |
 | VK (Vkontakte) | `VkClient` | Active | API v5.131 | `oauth.vk.com/authorize` | 2026-04-23 | [Docs](https://dev.vk.com/en/api/access-token/authcode-flow-user) |

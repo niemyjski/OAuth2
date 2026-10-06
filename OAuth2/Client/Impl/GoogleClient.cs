@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Text.Json;
 using OAuth2.Configuration;
 using OAuth2.Extensions;
@@ -95,11 +96,11 @@ namespace OAuth2.Client.Impl
                     && (emailVerified.ValueKind == JsonValueKind.True || emailVerified.ValueKind == JsonValueKind.False)
                     ? emailVerified.GetBoolean()
                     : (bool?)null,
-                HostedDomain = response.TryGetProperty("hd", out var hostedDomain) && hostedDomain.ValueKind == JsonValueKind.String
-                    ? hostedDomain.GetString()
+                ProviderData = response.TryGetProperty("hd", out var hostedDomain) && hostedDomain.ValueKind == JsonValueKind.String
+                    ? new Dictionary<string, string>(StringComparer.Ordinal) { ["hd"] = hostedDomain.GetString()! }
                     : null,
-                FirstName = response.GetProperty("given_name").GetString(),
-                LastName = response.GetProperty("family_name").GetString(),
+                FirstName = response.TryGetProperty("given_name", out var firstName) ? firstName.GetString() : null,
+                LastName = response.TryGetProperty("family_name", out var lastName) ? lastName.GetString() : null,
                 AvatarUri =
                     {
                         Small = !String.IsNullOrWhiteSpace(avatarUri) ? String.Format(avatarUriTemplate, avatarUri, AvatarInfo.SmallSize) : String.Empty,

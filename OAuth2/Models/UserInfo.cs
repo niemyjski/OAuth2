@@ -1,3 +1,5 @@
+using System.Collections.Generic;
+
 namespace OAuth2.Models
 {
     /// <summary>
@@ -59,20 +61,22 @@ namespace OAuth2.Models
         public string? Email { get; set; }
 
         /// <summary>
-        /// Whether the provider reports the email address as verified, or null when no valid verification claim is available.
+        /// Whether the provider reports the email address as verified, or null when verification is unknown or not mapped by the client.
         /// </summary>
         /// <remarks>
-        /// Provider verification alone does not authorize linking to an existing local account.
+        /// Verification methods and email authority depend on the provider. This value alone does not authorize linking to an existing local account.
         /// </remarks>
+        /// <seealso href="https://openid.net/specs/openid-connect-core-1_0.html#StandardClaims">OpenID Connect standard claims</seealso>
         public bool? EmailVerified { get; set; }
 
         /// <summary>
-        /// Hosted domain reported by the provider, or null when no valid hosted-domain claim is available.
+        /// Selected provider-specific string values, or null when none are supplied.
         /// </summary>
         /// <remarks>
-        /// This value does not by itself establish email verification or authority over the email address.
+        /// Keys and their meanings are scoped to <see cref="ProviderName"/>. This is not a copy of the complete provider response.
+        /// For Google, the "hd" entry contains the hosted-domain claim unchanged; its presence alone does not establish email authority.
         /// </remarks>
-        public string? HostedDomain { get; set; }
+        public Dictionary<string, string>? ProviderData { get; set; }
 
         /// <summary>
         /// First name.

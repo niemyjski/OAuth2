@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using FluentAssertions;
@@ -33,7 +34,25 @@ namespace OAuth2.Tests.Serialization
             info.FirstName.Should().Be("John");
             info.LastName.Should().Be("Doe");
             info.EmailVerified.Should().BeNull();
-            info.HostedDomain.Should().BeNull();
+            info.ProviderData.Should().BeNull();
+        }
+
+        [Test]
+        public void Deserialize_ProviderData_DoesNotPromoteProviderSpecificClaims()
+        {
+            // arrange
+            /* lang=json */
+            const string json = "{\"Id\":\"user-123\",\"ProviderName\":\"Other\",\"ProviderData\":{\"email_verified\":\"true\",\"hd\":\"example.com\"}}";
+
+            // act
+            var info = JsonSerializer.Deserialize<UserInfo>(json, Options);
+
+            // assert
+            info.Should().NotBeNull();
+            info!.ProviderName.Should().Be("Other");
+            info.EmailVerified.Should().BeNull();
+            info.ProviderData.Should().Contain("email_verified", "true");
+            info.ProviderData.Should().Contain("hd", "example.com");
         }
 
         [Test]
@@ -68,8 +87,9 @@ namespace OAuth2.Tests.Serialization
             };
             var original = new UserInfo
             {
+                ProviderName = "Google",
                 EmailVerified = true,
-                HostedDomain = "Example.COM"
+                ProviderData = new Dictionary<string, string> { ["hd"] = "Example.COM" }
             };
 
             // act
@@ -80,12 +100,13 @@ namespace OAuth2.Tests.Serialization
 
             // assert
             root.GetProperty("emailVerified").GetBoolean().Should().BeTrue();
-            root.GetProperty("hostedDomain").GetString().Should().Be("Example.COM");
+            root.GetProperty("providerData").GetProperty("hd").GetString().Should().Be("Example.COM");
             root.TryGetProperty("EmailVerified", out _).Should().BeFalse();
-            root.TryGetProperty("HostedDomain", out _).Should().BeFalse();
+            root.TryGetProperty("ProviderData", out _).Should().BeFalse();
             deserialized.Should().NotBeNull();
-            deserialized!.EmailVerified.Should().BeTrue();
-            deserialized.HostedDomain.Should().Be("Example.COM");
+            deserialized!.ProviderName.Should().Be("Google");
+            deserialized.EmailVerified.Should().BeTrue();
+            deserialized.ProviderData.Should().Contain("hd", "Example.COM");
         }
 
         [TestCase(JsonIgnoreCondition.WhenWritingNull)]
@@ -107,10 +128,61 @@ namespace OAuth2.Tests.Serialization
 
             // assert
             root.GetProperty("EmailVerified").GetBoolean().Should().BeFalse();
-            root.TryGetProperty("HostedDomain", out _).Should().BeFalse();
+            root.TryGetProperty("ProviderData", out _).Should().BeFalse();
             deserialized.Should().NotBeNull();
             deserialized!.EmailVerified.Should().BeFalse();
-            deserialized.HostedDomain.Should().BeNull();
+            deserialized.ProviderData.Should().BeNull();
+        }
+
+        [TestCase("Example.COM")]
+        [TestCase("")]
+        [TestCase(" example.com ")]
+        [TestCase("\"example.com\"")]
+        [TestCase("example\\domain")]
+        [TestCase("例え.テスト")]
+        public void Roundtrip_ProviderData_PreservesProviderAndStringValues(string domain)
+        {
+            // arrange
+            var original = new UserInfo
+            {
+                ProviderName = "Google",
+                ProviderData = new Dictionary<string, string> { ["hd"] = domain }
+            };
+
+            // act
+            var json = JsonSerializer.Serialize(original, Options);
+            var deserialized = JsonSerializer.Deserialize<UserInfo>(json, Options);
+
+            // assert
+            deserialized.Should().NotBeNull();
+            deserialized!.ProviderName.Should().Be("Google");
+            deserialized.ProviderData.Should().ContainSingle();
+            deserialized.ProviderData.Should().Contain("hd", domain);
+            deserialized.EmailVerified.Should().BeNull();
+        }
+
+        [Test]
+        public void Roundtrip_ProviderDataWithMixedCaseKeys_PreservesExactKeys()
+        {
+            // arrange
+            var original = new UserInfo
+            {
+                ProviderData = new Dictionary<string, string>
+                {
+                    ["hd"] = "lower.example",
+                    ["HD"] = "upper.example"
+                }
+            };
+
+            // act
+            var json = JsonSerializer.Serialize(original, Options);
+            var deserialized = JsonSerializer.Deserialize<UserInfo>(json, Options);
+
+            // assert
+            deserialized.Should().NotBeNull();
+            deserialized!.ProviderData.Should().HaveCount(2);
+            deserialized.ProviderData.Should().Contain("hd", "lower.example");
+            deserialized.ProviderData.Should().Contain("HD", "upper.example");
         }
 
         [TestCase(true, "example.com")]
@@ -120,7 +192,7 @@ namespace OAuth2.Tests.Serialization
         [TestCase(false, null)]
         [TestCase(null, "example.com")]
         [TestCase(true, "")]
-        public void Roundtrip_UserInfoClaims_PreservesVerificationAndHostedDomain(bool? emailVerified, string? hostedDomain)
+        public void Roundtrip_UserInfoClaims_PreservesVerificationAndProviderData(bool? emailVerified, string? hostedDomain)
         {
             // arrange
             var original = new UserInfo
@@ -129,7 +201,7 @@ namespace OAuth2.Tests.Serialization
                 ProviderName = "Google",
                 Email = "test@example.com",
                 EmailVerified = emailVerified,
-                HostedDomain = hostedDomain
+                ProviderData = hostedDomain == null ? null : new Dictionary<string, string> { ["hd"] = hostedDomain }
             };
 
             // act
@@ -144,13 +216,22 @@ namespace OAuth2.Tests.Serialization
             else
                 root.GetProperty("EmailVerified").ValueKind.Should().Be(JsonValueKind.Null);
 
-            root.GetProperty("HostedDomain").GetString().Should().Be(hostedDomain);
+            root.TryGetProperty("HostedDomain", out _).Should().BeFalse();
             deserialized.Should().NotBeNull();
             deserialized!.Id.Should().Be(original.Id);
             deserialized.ProviderName.Should().Be(original.ProviderName);
             deserialized.Email.Should().Be(original.Email);
             deserialized.EmailVerified.Should().Be(emailVerified);
-            deserialized.HostedDomain.Should().Be(original.HostedDomain);
+            if (hostedDomain == null)
+            {
+                root.GetProperty("ProviderData").ValueKind.Should().Be(JsonValueKind.Null);
+                deserialized.ProviderData.Should().BeNull();
+            }
+            else
+            {
+                root.GetProperty("ProviderData").GetProperty("hd").GetString().Should().Be(hostedDomain);
+                deserialized.ProviderData.Should().Contain("hd", hostedDomain);
+            }
         }
 
         [Test]
@@ -202,7 +283,7 @@ namespace OAuth2.Tests.Serialization
                 ProviderName = "TestProvider",
                 Email = "test@example.com",
                 EmailVerified = true,
-                HostedDomain = "example.com",
+                ProviderData = new Dictionary<string, string> { ["custom"] = "value" },
                 FirstName = "John",
                 LastName = "Doe",
                 AvatarUri =
@@ -223,7 +304,7 @@ namespace OAuth2.Tests.Serialization
             root.GetProperty("ProviderName").GetString().Should().Be("TestProvider");
             root.GetProperty("Email").GetString().Should().Be("test@example.com");
             root.GetProperty("EmailVerified").GetBoolean().Should().BeTrue();
-            root.GetProperty("HostedDomain").GetString().Should().Be("example.com");
+            root.GetProperty("ProviderData").GetProperty("custom").GetString().Should().Be("value");
             root.GetProperty("FirstName").GetString().Should().Be("John");
             root.GetProperty("LastName").GetString().Should().Be("Doe");
             root.GetProperty("PhotoUri").GetString().Should().Be("https://example.com/photo_normal.jpg");
@@ -254,6 +335,28 @@ namespace OAuth2.Tests.Serialization
             avatar.GetProperty("Large").GetString().Should().Be("https://example.com/photo_large.jpg");
         }
 
+        [TestCase("Facebook")]
+        [TestCase("GitHub")]
+        [TestCase("LinkedIn")]
+        [TestCase("Microsoft")]
+        public void Serialize_NonGoogleProvider_DoesNotExposeHostedDomain(string providerName)
+        {
+            // arrange
+            var userInfo = new UserInfo { ProviderName = providerName };
+
+            // act
+            var json = JsonSerializer.Serialize(userInfo, Options);
+            using var doc = JsonDocument.Parse(json);
+            var root = doc.RootElement;
+
+            // assert
+            root.GetProperty("ProviderName").GetString().Should().Be(providerName);
+            root.GetProperty("EmailVerified").ValueKind.Should().Be(JsonValueKind.Null);
+            root.GetProperty("ProviderData").ValueKind.Should().Be(JsonValueKind.Null);
+            root.TryGetProperty("HostedDomain", out _).Should().BeFalse();
+            root.TryGetProperty("hd", out _).Should().BeFalse();
+        }
+
         [TestCase(JsonIgnoreCondition.WhenWritingNull)]
         [TestCase(JsonIgnoreCondition.WhenWritingDefault)]
         public void Serialize_NullClaimsWithIgnoreCondition_OmitsClaims(JsonIgnoreCondition ignoreCondition)
@@ -273,7 +376,7 @@ namespace OAuth2.Tests.Serialization
             // assert
             root.GetProperty("Id").GetString().Should().Be("user-123");
             root.TryGetProperty("EmailVerified", out _).Should().BeFalse();
-            root.TryGetProperty("HostedDomain", out _).Should().BeFalse();
+            root.TryGetProperty("ProviderData", out _).Should().BeFalse();
         }
 
         [Test]
@@ -286,7 +389,7 @@ namespace OAuth2.Tests.Serialization
                 ProviderName = "TestProvider",
                 Email = "test@example.com",
                 EmailVerified = true,
-                HostedDomain = "example.com",
+                ProviderData = new Dictionary<string, string> { ["custom"] = "value" },
                 FirstName = "John",
                 LastName = "Doe",
                 AvatarUri =
@@ -329,7 +432,7 @@ namespace OAuth2.Tests.Serialization
             root.TryGetProperty("ProviderName", out _).Should().BeTrue();
             root.TryGetProperty("Email", out _).Should().BeTrue();
             root.TryGetProperty("EmailVerified", out _).Should().BeTrue();
-            root.TryGetProperty("HostedDomain", out _).Should().BeTrue();
+            root.TryGetProperty("ProviderData", out _).Should().BeTrue();
             root.TryGetProperty("FirstName", out _).Should().BeTrue();
             root.TryGetProperty("LastName", out _).Should().BeTrue();
             root.TryGetProperty("PhotoUri", out _).Should().BeTrue();
@@ -338,6 +441,7 @@ namespace OAuth2.Tests.Serialization
             root.TryGetProperty("provider_name", out _).Should().BeFalse();
             root.TryGetProperty("firstName", out _).Should().BeFalse();
             root.TryGetProperty("email_verified", out _).Should().BeFalse();
+            root.TryGetProperty("providerData", out _).Should().BeFalse();
             root.TryGetProperty("hd", out _).Should().BeFalse();
         }
 
@@ -349,7 +453,6 @@ namespace OAuth2.Tests.Serialization
             {
                 Id = "1",
                 Email = "",
-                HostedDomain = "",
                 FirstName = "",
                 LastName = ""
             };
@@ -361,7 +464,6 @@ namespace OAuth2.Tests.Serialization
 
             // assert
             root.GetProperty("Email").GetString().Should().BeEmpty();
-            root.GetProperty("HostedDomain").GetString().Should().BeEmpty();
             root.GetProperty("FirstName").GetString().Should().BeEmpty();
             root.GetProperty("LastName").GetString().Should().BeEmpty();
         }
@@ -399,7 +501,7 @@ namespace OAuth2.Tests.Serialization
             // assert
             root.GetProperty("Email").ValueKind.Should().Be(JsonValueKind.Null);
             root.GetProperty("EmailVerified").ValueKind.Should().Be(JsonValueKind.Null);
-            root.GetProperty("HostedDomain").ValueKind.Should().Be(JsonValueKind.Null);
+            root.GetProperty("ProviderData").ValueKind.Should().Be(JsonValueKind.Null);
             root.GetProperty("FirstName").ValueKind.Should().Be(JsonValueKind.Null);
             root.GetProperty("LastName").ValueKind.Should().Be(JsonValueKind.Null);
         }

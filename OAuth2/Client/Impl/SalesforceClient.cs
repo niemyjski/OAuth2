@@ -5,6 +5,7 @@ using OAuth2.Extensions;
 using OAuth2.Infrastructure;
 using OAuth2.Models;
 using RestSharp;
+using RestSharp.Authenticators.OAuth2;
 
 namespace OAuth2.Client.Impl
 {
@@ -84,6 +85,13 @@ namespace OAuth2.Client.Impl
         }
 
         /// <inheritdoc />
+        protected override void BeforeGetUserInfo(BeforeAfterRequestArgs args)
+        {
+            base.BeforeGetUserInfo(args);
+            args.Request.Authenticator = new OAuth2AuthorizationRequestHeaderAuthenticator(AccessToken!, "Bearer");
+        }
+
+        /// <inheritdoc />
         protected override string? ParseTokenResponse(string content, string key)
         {
             // save the user's identity service url which is included in the response
@@ -106,6 +114,7 @@ namespace OAuth2.Client.Impl
             {
                 Id = response.GetProperty("id").GetStringValue(),
                 Email = response.GetStringOrDefault("email"),
+                EmailVerified = response.GetBooleanOrDefault("email_verified"),
                 FirstName = response.GetProperty("first_name").GetString(),
                 LastName = response.GetProperty("last_name").GetString(),
                 AvatarUri =

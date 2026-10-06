@@ -103,10 +103,7 @@ namespace OAuth2.Client.Impl
             {
                 Id = response.GetProperty("sub").GetStringValue(),
                 Email = response.GetStringOrDefault("email"),
-                EmailVerified = response.TryGetProperty("email_verified", out var emailVerified)
-                    && (emailVerified.ValueKind == JsonValueKind.True || emailVerified.ValueKind == JsonValueKind.False)
-                    ? emailVerified.GetBoolean()
-                    : (bool?)null,
+                EmailVerified = response.GetBooleanOrDefault("email_verified"),
                 ProviderData = response.TryGetProperty("hd", out var hostedDomain) && hostedDomain.ValueKind == JsonValueKind.String
                     ? new Dictionary<string, string>(StringComparer.Ordinal) { ["hd"] = hostedDomain.GetString()! }
                     : null,

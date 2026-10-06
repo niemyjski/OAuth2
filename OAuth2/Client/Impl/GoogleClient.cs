@@ -5,6 +5,7 @@ using OAuth2.Configuration;
 using OAuth2.Extensions;
 using OAuth2.Infrastructure;
 using OAuth2.Models;
+using RestSharp.Authenticators.OAuth2;
 
 namespace OAuth2.Client.Impl
 {
@@ -77,6 +78,16 @@ namespace OAuth2.Client.Impl
             get { return "Google"; }
         }
 
+        /// <summary>
+        /// Uses Google's documented Bearer scheme instead of the authenticator's default OAuth scheme.
+        /// </summary>
+        /// <param name="args">Request context for the userinfo request.</param>
+        /// <seealso href="https://developers.google.com/identity/openid-connect/reference#userinfo">Google userinfo endpoint</seealso>
+        protected override void BeforeGetUserInfo(BeforeAfterRequestArgs args)
+        {
+            base.BeforeGetUserInfo(args);
+            args.Request.Authenticator = new OAuth2AuthorizationRequestHeaderAuthenticator(AccessToken!, "Bearer");
+        }
 
         /// <summary>
         /// Should return parsed <see cref="UserInfo"/> from content received from third-party service.

@@ -6,11 +6,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - name: Checkout
-      uses: actions/checkout@v6
+      uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
       with:
         fetch-depth: 0
     - name: Setup .NET
-      uses: actions/setup-dotnet@v5
+      uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5.4.0
       with:
         dotnet-version: |
           8.0.x
@@ -30,7 +30,7 @@ jobs:
       if: github.event_name != 'pull_request'
       run: dotnet pack --configuration Release --no-build
     - name: Publish CI Packages
-      if: github.event_name != 'pull_request'
+      if: github.event_name != 'pull_request' && github.repository == 'titarenko/OAuth2'
       run: |
         for package in $(find -name "*.nupkg" | grep "minver" -v); do
           echo "${0##*/}": Pushing $package...
@@ -39,7 +39,7 @@ jobs:
           dotnet nuget push $package --source https://nuget.pkg.github.com/titarenko/index.json --api-key ${{ secrets.GITHUB_TOKEN }} --skip-duplicate
         done
     - name: Publish Release Packages
-      if: startsWith(github.ref, 'refs/tags/v')
+      if: startsWith(github.ref, 'refs/tags/v') && github.repository == 'titarenko/OAuth2'
       run: |
         for package in $(find -name "*.nupkg" | grep "minver" -v); do
           echo "${0##*/}": Pushing $package...

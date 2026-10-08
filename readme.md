@@ -24,6 +24,8 @@ dotnet add package OAuth2
 
 ```csharp
 using System.Collections.Specialized;
+using System.Security.Cryptography;
+using Microsoft.AspNetCore.WebUtilities;
 using OAuth2.Client.Impl;
 using OAuth2.Configuration;
 using OAuth2.Infrastructure;
@@ -44,10 +46,20 @@ GoogleClient CreateGoogleClient()
 }
 
 // Step 1: Redirect the user to Google's login page
-app.MapGet("/auth/google", async () =>
+app.MapGet("/auth/google", async (HttpContext context) =>
 {
+    var state = WebEncoders.Base64UrlEncode(RandomNumberGenerator.GetBytes(32));
+    context.Response.Cookies.Append("oauth_state", state, new CookieOptions
+    {
+        HttpOnly = true,
+        Secure = true,
+        SameSite = SameSiteMode.Lax,
+        MaxAge = TimeSpan.FromMinutes(5),
+        Path = "/auth/google/callback"
+    });
+
     var client = CreateGoogleClient();
-    var loginUri = await client.GetLoginLinkUriAsync();
+    var loginUri = await client.GetLoginLinkUriAsync(state);
     return Results.Redirect(loginUri);
 });
 
@@ -55,11 +67,27 @@ app.MapGet("/auth/google", async () =>
 app.MapGet("/auth/google/callback", async (HttpContext context) =>
 {
     var code = context.Request.Query["code"].ToString();
+    var returnedState = context.Request.Query["state"].ToString();
     if (string.IsNullOrEmpty(code))
         return Results.BadRequest("Missing authorization code.");
+    if (!context.Request.Cookies.TryGetValue("oauth_state", out var expectedState) ||
+        string.IsNullOrEmpty(returnedState) ||
+        !string.Equals(returnedState, expectedState, StringComparison.Ordinal))
+    {
+        return Results.BadRequest("Invalid OAuth state.");
+    }
+
+    context.Response.Cookies.Delete("oauth_state", new CookieOptions
+    {
+        Path = "/auth/google/callback"
+    });
 
     var client = CreateGoogleClient();
-    var userInfo = await client.GetUserInfoAsync(new NameValueCollection { { "code", code } });
+    var userInfo = await client.GetUserInfoAsync(new NameValueCollection
+    {
+        { "code", code },
+        { "state", returnedState }
+    });
 
     return Results.Ok(new
     {
@@ -73,6 +101,8 @@ app.MapGet("/auth/google/callback", async (HttpContext context) =>
 
 app.Run();
 ```
+
+The library returns callback state but does not validate it. Generate an unpredictable, single-use value, bind it to the initiating browser session, and compare it before exchanging the authorization code. The example uses a short-lived `Secure`, `HttpOnly`, `SameSite=Lax` cookie and assumes HTTPS. Client instances retain state and tokens; create one per authentication flow and do not share an instance concurrently or register it as a singleton.
 
 ## Email verification and provider-specific data
 

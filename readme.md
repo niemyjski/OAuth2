@@ -132,46 +132,26 @@ The library returns callback state but does not validate it. This HTTPS example 
 
 The example permits one outstanding login per browser. It deletes the browser cookie after a matching callback, including provider denial. Cookie deletion does not enforce atomic single use against replayed or concurrent requests. For production, consume state through a server-side store with an atomic take operation. Alternatively, use an authentication handler that provides the required transaction protections.
 
-PKCE and ID-token validation are outside this example. Client instances retain state and tokens. Create one instance per authentication flow. Do not share an instance concurrently or register it as a singleton.
+PKCE and ID token validation are outside this example. Client instances retain state and tokens. Create one instance per authentication flow. Do not share an instance concurrently or register it as a singleton.
 
 ## Email verification and provider-specific data
 
-`UserInfo.EmailVerified` stores the provider's verification status: `true`, `false`, or `null`. Null means unknown or not mapped by the client. Email verification is an [OpenID Connect standard claim](https://openid.net/specs/openid-connect-core-1_0.html#StandardClaims), not a Google-specific concept. Providers can use different verification methods. A shared property does not imply the same level of assurance across providers.
+`UserInfo.EmailVerified` is the provider's nullable verification assertion: `true`, `false`, or `null` when unknown or not mapped. [OpenID Connect defines the claim](https://openid.net/specs/openid-connect-core-1_0.html#StandardClaims), but providers need not use the same verification method.
 
-| Client | Source of `EmailVerified` | Scope of support |
-|--------|---------------------------|------------------|
-| `GoogleClient` | `email_verified` in userinfo | Only JSON booleans; absent, null, or non-boolean claims produce null. |
-| `LinkedInClient` | `email_verified` in `/v2/userinfo` | Same strict, nullable handling of the optional claim. |
-| `SalesforceClient` | `email_verified` in the identity URL response | Same strict, nullable handling; the existing identity URL and user ID are preserved. |
-| `GitHubClient` | `verified` on the selected `/user/emails` record | Preserves the existing private-email fallback and selection order. A public profile email alone leaves verification unknown; no extra request or permission is added. |
+| Client | Mapping |
+|--------|---------|
+| `GoogleClient` | Boolean `email_verified` from userinfo. String `hd` is preserved in `ProviderData["hd"]`. [Reference](https://developers.google.com/identity/openid-connect/reference). |
+| `LinkedInClient` | Optional boolean `email_verified` from `/v2/userinfo`. [Reference](https://learn.microsoft.com/en-us/linkedin/consumer/integrations/self-serve/sign-in-with-linkedin-v2). |
+| `SalesforceClient` | Boolean `email_verified` from the existing identity URL response. [Reference](https://developer.salesforce.com/docs/platform/mobile-sdk/guide/oauth-using-identity-urls.html). |
+| `GitHubClient` | `verified` from the exact email record selected by the existing `/user/emails` fallback. A public `/user` email leaves verification unknown without adding a request or scope. [Reference](https://docs.github.com/en/rest/users/emails#list-email-addresses-for-the-authenticated-user). |
 
-GitHub verification belongs to the selected address, not another address in the response. The typed email parser and protected `bool Verified` API remain compatible. Omitted verification remains distinct from false. The [provider-claims reference](docs/provider-claims.md) describes endpoints, malformed values, and providers that need separate API migrations. Clients not listed above leave `EmailVerified` null.
+Google, LinkedIn, and Salesforce map absent, null, or non-boolean verification to `null`; strings and numbers are not converted. GitHub retains its existing typed parser and primary/verified/first-email selection order. Its protected `bool Verified` API remains compatible while omission remains distinguishable from false.
 
-Provider-specific strings belong in the optional `UserInfo.ProviderData` dictionary. Interpret its keys together with `ProviderName`. These keys are not universal claims. Built-in clients copy only explicitly mapped values. They exclude complete provider responses, arbitrary JSON objects, and tokens. There is no shared `HostedDomain` property.
+`ProviderData` contains only explicitly mapped strings, not raw responses or tokens. Only Google currently populates it. Read `hd` only when `ProviderName == "Google"`; it is not a shared tenant identifier or a domain inferred from an email. There is no top-level `HostedDomain` property. Missing or non-string `hd` leaves `ProviderData` null.
 
-`GoogleClient` maps a string-valued `hd` claim to `ProviderData["hd"]`. It preserves the string, including case, whitespace, and empty strings. An absent, null, or non-string claim leaves `ProviderData` null. This value is Google's hosted-domain claim. It is not a generic tenant identifier or a domain derived from the email address. Other built-in clients leave `ProviderData` null.
+Use `ProviderName` and `UserInfo.Id` to identify an account. Neither these mutable DTO values nor a matching email authorize account linking. Apply the application's policy and [Google's email-authority guidance](https://developers.google.com/identity/gsi/web/guides/verify-google-id-token); a historical verification flag does not always prove current mailbox ownership.
 
-Google permits missing `given_name` and `family_name`. These values become null without discarding the remaining user information. See [Google's userinfo claim reference](https://developers.google.com/identity/openid-connect/reference#userinfo).
-
-Read Google's hosted domain explicitly in its provider context:
-
-```csharp
-string? googleHostedDomain = null;
-if (userInfo.ProviderName == "Google" &&
-    userInfo.ProviderData != null &&
-    userInfo.ProviderData.TryGetValue("hd", out var hostedDomain))
-{
-    googleHostedDomain = hostedDomain;
-}
-```
-
-This code reads metadata. It does not authorize access or link an account. A correctly typed string is not a validated or approved domain. Use `ProviderName` and `Id` (Google's `sub`) to identify a provider account. Apply an explicit application policy for account linking and domain restrictions.
-
-Google's authority over an email address depends on the account type. An external address can remain marked verified after ownership changes. A hosted-domain string alone does not establish email authority. See [Google's verification guidance](https://developers.google.com/identity/gsi/web/guides/verify-google-id-token). Preserving userinfo claims does not add ID-token validation or automatic account linking.
-
-Older serialized `UserInfo` objects deserialize with both new properties null. Existing properties remain available. Serialization follows the serializer's naming and null/default settings. Default `System.Text.Json` options write `EmailVerified` and `ProviderData`, including null values. Provider data remains nested in its dictionary.
-
-Consumers need no provider-specific subclass or polymorphic serializer configuration. The application remains responsible for dictionary-key policies.
+Compatibility: missing new members deserialize as null; default `System.Text.Json` output includes `EmailVerified` and `ProviderData`, subject to the caller's serializer options.
 
 ## Supported Services
 
@@ -182,7 +162,7 @@ Consumers need no provider-specific subclass or polymorphic serializer configura
 | Facebook | `FacebookClient` | Active | Graph API v25.0 | `www.facebook.com/v25.0/dialog/oauth` | 2026-04-23 | [Docs](https://developers.facebook.com/docs/facebook-login/guides/advanced/manual-flow) |
 | Microsoft | `MicrosoftClient` | Active | Identity Platform v2.0 / Graph v1.0 | `login.microsoftonline.com/common/oauth2/v2.0/authorize` | 2026-04-23 | [Docs](https://learn.microsoft.com/en-us/entra/identity-platform/v2-oauth2-auth-code-flow) |
 | Asana | `AsanaClient` | Active | API v1 | `app.asana.com/-/oauth_authorize` | 2026-04-23 | [Docs](https://developers.asana.com/docs/oauth) |
-| DigitalOcean | `DigitalOceanClient` | **Token contract mismatch** | OAuth 2.0 (legacy token parser) | `cloud.digitalocean.com/v1/oauth/authorize` | Not live-verified | [OAuth API](https://docs.digitalocean.com/reference/api/oauth/) |
+| DigitalOcean | `DigitalOceanClient` | **Token parser migration needed** | OAuth 2.0 | `cloud.digitalocean.com/v1/oauth/authorize` | 2026-10-13 (docs) | [OAuth API](https://docs.digitalocean.com/reference/api/oauth/) |
 | ExactOnline | `ExactOnlineClient` | Active | REST API v1 | `start.exactonline.nl/api/oauth2/authorize` | 2026-04-23 | [Docs](https://developers.exactonline.com/) |
 | Fitbit | `FitbitClient` | Active | Web API v1 (user profile) | `www.fitbit.com/oauth2/authorize` | 2026-04-23 | [Docs](https://dev.fitbit.com/build/reference/web-api/authorization/) |
 | Foursquare | `FoursquareClient` | **Deprecated** | v2 (OAuth deprecated) | `foursquare.com/oauth2/authorize` | 2026-04-23 | [Docs](https://docs.foursquare.com/) |
@@ -194,14 +174,14 @@ Consumers need no provider-specific subclass or polymorphic serializer configura
 | Spotify | `SpotifyClient` | Active | Web API v1 | `accounts.spotify.com/authorize` | 2026-04-23 | [Docs](https://developer.spotify.com/documentation/web-api/tutorials/code-flow) |
 | Todoist | `TodoistClient` | Active | REST API v1 | `app.todoist.com/oauth/authorize` | 2026-04-23 | [Docs](https://developer.todoist.com/api/v1/) |
 | X (Twitter) | `XClient` | Active | OAuth 1.0a / API v1.1 | `api.twitter.com/oauth/authenticate` | 2026-04-23 | [Docs](https://developer.x.com/en/docs/authentication/oauth-1-0a) |
-| Uber | `UberClient` | **Deprecated userinfo endpoint** | OAuth v2 / userinfo v1 | `auth.uber.com/oauth/v2/authorize` | Not live-verified | [Legacy endpoint](https://developer.uber.com/docs/consumer-identity/references/api/v1/me-get) |
+| Uber | `UberClient` | **Deprecated userinfo endpoint** | OAuth v2 / userinfo v1 | `auth.uber.com/oauth/v2/authorize` | 2026-10-13 (docs) | [Legacy endpoint](https://developer.uber.com/docs/consumer-identity/references/api/v1/me-get) |
 | VK (Vkontakte) | `VkClient` | Active | API v5.131 | `oauth.vk.com/authorize` | 2026-04-23 | [Docs](https://dev.vk.com/en/api/access-token/authcode-flow-user) |
 | VSTS (Azure DevOps) | `VSTSClient` | **Deprecated (2026)** | Azure DevOps OAuth (deprecated Apr 2025) | `app.vssps.visualstudio.com/oauth2/authorize` | 2026-04-23 | [Docs](https://learn.microsoft.com/en-us/azure/devops/integrate/get-started/authentication/azure-devops-oauth) |
 | Windows Live | `WindowsLiveClient` | **Legacy (Working)** | Live SDK v5.0 | `login.live.com/oauth20_authorize.srf` | 2026-04-23 | [Migration Guide](https://learn.microsoft.com/en-us/onedrive/developer/rest-api/concepts/migrating-from-live-sdk) |
-| Yahoo | `YahooClient` | **Retired userinfo endpoint** | OAuth 2.0 / Social Directory v1 | `api.login.yahoo.com/oauth2/request_auth` | Not live-verified | [Migration guide](https://developer.yahoo.com/oauth/social-directory-eol/) |
+| Yahoo | `YahooClient` | **Retired userinfo endpoint** | OAuth 2.0 / Social Directory v1 | `api.login.yahoo.com/oauth2/request_auth` | 2026-10-13 (docs) | [Migration guide](https://developer.yahoo.com/oauth/social-directory-eol/) |
 | Yandex | `YandexClient` | Active | OAuth 2.0 (Yandex ID) | `oauth.yandex.ru/authorize` | 2026-04-23 | [Docs](https://yandex.com/dev/id/doc/en/codes/code-url) |
 
-The DigitalOcean, Uber, and Yahoo statuses describe the current clients. They do not describe the availability of replacement APIs. Source and documentation were reviewed on 2026-10-06. No authenticated live migration was tested. See the [migration assessment](docs/provider-claims.md#api-support-that-requires-separate-endpoint-work) for identity, permission, and compatibility requirements. These clients still use their existing response contracts.
+The three dated documentation checks above are not authenticated login tests. Their runtime endpoints remain unchanged. DigitalOcean's OAuth 2.0 server uses `/v1/oauth`; the separate [`/v2/account`](https://docs.digitalocean.com/reference/api/reference/account/) API supplies verification. The current token example has `info.uuid`, while this client's parser requires `uid`; identity continuity and permissions must be verified before migration. [Uber v3](https://developer.uber.com/docs/consumer-identity/references/api/v3/me-get) requires approval and different profile mapping. [Yahoo's replacement](https://developer.yahoo.com/oauth/social-directory-eol/) maps `guid` to `sub` but changes profile fields according to the granted scopes. Do not silently change stored account identifiers or scopes.
 
 > **Removed providers** (Instagram, Xing): These providers' APIs have been retired or shut down. The client classes have been removed.
 > - **Instagram**: Basic Display API shut down Dec 4, 2024. There is no consumer OAuth replacement — the remaining Instagram APIs are business/creator-only. [Announcement](https://developers.facebook.com/blog/post/2024/09/04/update-on-instagram-basic-display-api/)

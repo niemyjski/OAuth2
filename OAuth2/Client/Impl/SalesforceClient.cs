@@ -87,14 +87,13 @@ namespace OAuth2.Client.Impl
         /// <inheritdoc />
         protected override void BeforeGetUserInfo(BeforeAfterRequestArgs args)
         {
-            base.BeforeGetUserInfo(args);
             args.Request.Authenticator = new OAuth2AuthorizationRequestHeaderAuthenticator(AccessToken!, "Bearer");
         }
 
         /// <inheritdoc />
         protected override string? ParseTokenResponse(string content, string key)
         {
-            // save the user's identity service url which is included in the response
+            // Save the identity URL returned in the token response.
             SalesforceProfileUrl = base.ParseTokenResponse(content, "id");
 
             return base.ParseTokenResponse(content, key);

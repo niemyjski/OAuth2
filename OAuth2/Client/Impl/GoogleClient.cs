@@ -85,7 +85,6 @@ namespace OAuth2.Client.Impl
         /// <seealso href="https://developers.google.com/identity/openid-connect/reference#userinfo">Google userinfo endpoint</seealso>
         protected override void BeforeGetUserInfo(BeforeAfterRequestArgs args)
         {
-            base.BeforeGetUserInfo(args);
             args.Request.Authenticator = new OAuth2AuthorizationRequestHeaderAuthenticator(AccessToken!, "Bearer");
         }
 

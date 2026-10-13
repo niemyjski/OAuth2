@@ -186,7 +186,7 @@ namespace OAuth2.Client.Impl
             /// </summary>
             public bool Verified
             {
-                get { return VerificationStatus == true; }
+                get { return VerificationStatus is true; }
                 set { VerificationStatus = value; }
             }
 

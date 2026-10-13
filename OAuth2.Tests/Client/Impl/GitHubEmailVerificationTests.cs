@@ -1,8 +1,11 @@
 using System.Collections.Generic;
 using System.Collections.Specialized;
+using System.Net;
+using System.Text.Json;
 using System.Threading.Tasks;
 using FluentAssertions;
 using NUnit.Framework;
+using OAuth2.Client;
 using OAuth2.Client.Impl;
 using OAuth2.Configuration;
 using OAuth2.Infrastructure;
@@ -58,6 +61,48 @@ namespace OAuth2.Tests.Client.Impl
             Handler.SentRequests[2].RequestUri!.AbsolutePath.Should().Be("/user/emails");
             Handler.SentRequests[2].Headers.Authorization!.Scheme.Should().Be("Bearer");
             Handler.SentRequests[2].Headers.Authorization!.Parameter.Should().Be("token");
+        }
+
+        [TestCase(HttpStatusCode.Unauthorized)]
+        [TestCase(HttpStatusCode.Forbidden)]
+        [TestCase(HttpStatusCode.TooManyRequests)]
+        [TestCase(HttpStatusCode.InternalServerError)]
+        public async Task GetUserInfoAsync_EmailEndpointFailure_RejectsClaims(HttpStatusCode statusCode)
+        {
+            // arrange
+            Handler.EnqueueResponse(TokenResponse);
+            Handler.EnqueueResponse(PrivateProfile);
+            Handler.EnqueueResponse(statusCode, /* lang=json */ "[{\"email\":\"user@example.com\",\"primary\":true,\"verified\":true}]");
+            var parameters = new NameValueCollection { { "code", "code" } };
+
+            // act
+            var action = () => _client.GetUserInfoAsync(parameters);
+
+            // assert
+            var exception = await action.Should().ThrowAsync<UnexpectedResponseException>();
+            exception.Which.Response!.StatusCode.Should().Be(statusCode);
+            Handler.SentRequests.Should().HaveCount(3);
+            Handler.SentRequests[2].RequestUri!.AbsoluteUri.Should().Be("https://api.github.com/user/emails");
+        }
+
+        [TestCase("null")]
+        [TestCase("\"true\"")]
+        [TestCase("1")]
+        [TestCase("0")]
+        [TestCase("{}")]
+        [TestCase("[]")]
+        public async Task GetUserInfoAsync_MalformedVerification_RejectsClaims(string verification)
+        {
+            // arrange
+            EnqueuePrivateProfile("[{\"email\":\"user@example.com\",\"verified\":" + verification + "}]");
+            var parameters = new NameValueCollection { { "code", "code" } };
+
+            // act
+            var action = () => _client.GetUserInfoAsync(parameters);
+
+            // assert
+            await action.Should().ThrowAsync<JsonException>();
+            Handler.SentRequests.Should().HaveCount(3);
         }
 
         [Test]

@@ -23,4 +23,4 @@ dotnet build OAuth2.slnx --configuration Release
 dotnet test OAuth2.Tests/OAuth2.Tests.csproj --configuration Release --no-build --no-restore
 ```
 
-The build covers all library targets; the test project runs on .NET 10. Passing mocks do not verify provider approval, live grants, or existing account identifiers. Never commit credentials or private user data. Report the tested revision and distinguish executed tests from documentation-only verification.
+Install the .NET 8 and .NET 10 runtimes. The build covers all library targets; the test project runs on both .NET 8 and .NET 10. The netstandard2.0 library is built, not directly executed by this test project. Passing mocks do not verify provider approval, live grants, or existing account identifiers. Never commit credentials or private user data. Report the tested revision and distinguish executed tests from documentation-only verification.

@@ -1,50 +1,31 @@
 using System.Collections.Generic;
 using System.Collections.Specialized;
-using System.Net.Http;
 using System.Threading.Tasks;
 using FluentAssertions;
-using NSubstitute;
 using NUnit.Framework;
 using OAuth2.Client.Impl;
 using OAuth2.Configuration;
 using OAuth2.Infrastructure;
 using OAuth2.Tests.TestHelpers;
-using RestSharp;
 
 namespace OAuth2.Tests.Client.Impl
 {
     [TestFixture]
-    public class GitHubEmailVerificationTests
+    public class GitHubEmailVerificationTests : OAuth2ClientTestBase
     {
         /* lang=json */
         private const string PrivateProfile = "{\"id\":123,\"login\":\"test\",\"name\":\"John Doe\",\"email\":null,\"avatar_url\":\"https://example.com/avatar\"}";
         /* lang=json */
         private const string TokenResponse = "{\"access_token\":\"token\",\"token_type\":\"Bearer\"}";
 
-        private MockHttpMessageHandler _handler = null!;
-        private HttpClient _httpClient = null!;
-        private RestClient _tokenClient = null!;
-        private RestClient _apiClient = null!;
         private TestableGitHubClient _client = null!;
 
         [SetUp]
-        public void SetUp()
+        public override void SetUp()
         {
-            _handler = new MockHttpMessageHandler();
-            _httpClient = new HttpClient(_handler, disposeHandler: false);
-            _tokenClient = new RestClient(_httpClient, new RestClientOptions("https://github.com"));
-            _apiClient = new RestClient(_httpClient, new RestClientOptions("https://api.github.com"));
-            var factory = Substitute.For<IRequestFactory>();
-            factory.CreateClient("https://github.com").Returns(_tokenClient);
-            factory.CreateClient("https://api.github.com").Returns(_apiClient);
-            factory.CreateRequest(Arg.Any<string>(), Arg.Any<Method>()).Returns(call =>
-                new RestRequest(call.Arg<string>(), call.Arg<Method>()));
-            _client = new TestableGitHubClient(factory, new ClientConfiguration
-            {
-                ClientId = "client-id",
-                ClientSecret = "client-secret",
-                RedirectUri = "https://app.example.com/callback"
-            });
+            base.SetUp();
+            ConfigureEndpoints("https://github.com", "https://api.github.com");
+            _client = new TestableGitHubClient(Factory, Configuration);
         }
 
         [TestCase(/* lang=json */ "[]", null, null)]
@@ -73,10 +54,10 @@ namespace OAuth2.Tests.Client.Impl
             info.Email.Should().Be(expectedEmail);
             info.EmailVerified.Should().Be(expectedVerification);
             info.ProviderData.Should().BeNull();
-            _handler.SentRequests.Should().HaveCount(3);
-            _handler.SentRequests[2].RequestUri!.AbsolutePath.Should().Be("/user/emails");
-            _handler.SentRequests[2].Headers.Authorization!.Scheme.Should().Be("Bearer");
-            _handler.SentRequests[2].Headers.Authorization!.Parameter.Should().Be("token");
+            Handler.SentRequests.Should().HaveCount(3);
+            Handler.SentRequests[2].RequestUri!.AbsolutePath.Should().Be("/user/emails");
+            Handler.SentRequests[2].Headers.Authorization!.Scheme.Should().Be("Bearer");
+            Handler.SentRequests[2].Headers.Authorization!.Parameter.Should().Be("token");
         }
 
         [Test]
@@ -93,15 +74,15 @@ namespace OAuth2.Tests.Client.Impl
             // assert
             info.Email.Should().Be("override@example.com");
             info.EmailVerified.Should().BeFalse();
-            _handler.SentRequests.Should().HaveCount(3);
+            Handler.SentRequests.Should().HaveCount(3);
         }
 
         [Test]
         public async Task GetUserInfoAsync_PublicEmail_DoesNotInferVerificationOrAddRequests()
         {
             // arrange
-            _handler.EnqueueResponse(TokenResponse);
-            _handler.EnqueueResponse(/* lang=json */ "{\"id\":123,\"login\":\"test\",\"email\":\"public@example.com\",\"avatar_url\":null,\"verified\":true,\"email_verified\":true,\"hd\":\"example.com\"}");
+            Handler.EnqueueResponse(TokenResponse);
+            Handler.EnqueueResponse(/* lang=json */ "{\"id\":123,\"login\":\"test\",\"email\":\"public@example.com\",\"avatar_url\":null,\"verified\":true,\"email_verified\":true,\"hd\":\"example.com\"}");
             var parameters = new NameValueCollection { { "code", "code" } };
 
             // act
@@ -111,8 +92,8 @@ namespace OAuth2.Tests.Client.Impl
             info.Email.Should().Be("public@example.com");
             info.EmailVerified.Should().BeNull();
             info.ProviderData.Should().BeNull();
-            _handler.SentRequests.Should().HaveCount(2);
-            _handler.SentRequests[1].RequestUri!.AbsolutePath.Should().Be("/user");
+            Handler.SentRequests.Should().HaveCount(2);
+            Handler.SentRequests[1].RequestUri!.AbsolutePath.Should().Be("/user");
         }
 
         [Test]
@@ -130,23 +111,14 @@ namespace OAuth2.Tests.Client.Impl
             // assert
             info.Email.Should().Be("second@example.com");
             info.EmailVerified.Should().BeNull();
-            _handler.SentRequests.Should().HaveCount(6);
-        }
-
-        [TearDown]
-        public void TearDown()
-        {
-            _apiClient?.Dispose();
-            _tokenClient?.Dispose();
-            _httpClient?.Dispose();
-            _handler?.Dispose();
+            Handler.SentRequests.Should().HaveCount(6);
         }
 
         private void EnqueuePrivateProfile(string emails)
         {
-            _handler.EnqueueResponse(TokenResponse);
-            _handler.EnqueueResponse(PrivateProfile);
-            _handler.EnqueueResponse(emails);
+            Handler.EnqueueResponse(TokenResponse);
+            Handler.EnqueueResponse(PrivateProfile);
+            Handler.EnqueueResponse(emails);
         }
 
         private class TestableGitHubClient : GitHubClient

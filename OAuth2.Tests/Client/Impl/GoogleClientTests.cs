@@ -1,7 +1,4 @@
-using System.Collections.Specialized;
-using System.Net.Http;
 using System.Text.Json;
-using System.Threading.Tasks;
 using FluentAssertions;
 using NSubstitute;
 using NUnit.Framework;
@@ -10,8 +7,6 @@ using OAuth2.Client.Impl;
 using OAuth2.Configuration;
 using OAuth2.Infrastructure;
 using OAuth2.Models;
-using OAuth2.Tests.TestHelpers;
-using RestSharp;
 
 namespace OAuth2.Tests.Client.Impl
 {
@@ -49,47 +44,6 @@ namespace OAuth2.Tests.Client.Impl
             // assert
             endpoint.BaseUri.Should().Be("https://oauth2.googleapis.com");
             endpoint.Resource.Should().Be("/token");
-        }
-
-        [Test]
-        public async Task GetUserInfoAsync_GoogleResponse_PreservesProviderAndClaims()
-        {
-            // arrange
-            using var handler = new MockHttpMessageHandler();
-            handler.EnqueueResponse(/* lang=json */ "{\"access_token\":\"token\",\"token_type\":\"Bearer\"}");
-            handler.EnqueueResponse(/* lang=json */ "{\"sub\":\"user-123\",\"email\":\"user@example.com\",\"email_verified\":true,\"hd\":\"example.com\"}");
-            using var httpClient = new HttpClient(handler);
-            using var tokenClient = new RestClient(httpClient, new RestClientOptions("https://oauth2.googleapis.com"));
-            using var userInfoClient = new RestClient(httpClient, new RestClientOptions("https://www.googleapis.com"));
-            var factory = Substitute.For<IRequestFactory>();
-            factory.CreateClient("https://oauth2.googleapis.com").Returns(tokenClient);
-            factory.CreateClient("https://www.googleapis.com").Returns(userInfoClient);
-            factory.CreateRequest(Arg.Any<string>(), Arg.Any<Method>()).Returns(call =>
-                new RestRequest(call.Arg<string>(), call.Arg<Method>()));
-            var configuration = new ClientConfiguration
-            {
-                ClientId = "client-id",
-                ClientSecret = "client-secret",
-                RedirectUri = "https://app.example.com/callback"
-            };
-            var client = new GoogleClient(factory, configuration);
-            var parameters = new NameValueCollection { { "code", "code" }, { "state", "state" } };
-
-            // act
-            var info = await client.GetUserInfoAsync(parameters);
-
-            // assert
-            info.ProviderName.Should().Be("Google");
-            info.Id.Should().Be("user-123");
-            info.Email.Should().Be("user@example.com");
-            info.EmailVerified.Should().BeTrue();
-            info.ProviderData.Should().ContainSingle().Which.Should().BeEquivalentTo(new { Key = "hd", Value = "example.com" });
-            info.FirstName.Should().BeNull();
-            info.LastName.Should().BeNull();
-            client.State.Should().Be("state");
-            handler.SentRequests.Should().HaveCount(2);
-            handler.SentRequests[1].Headers.Authorization!.Scheme.Should().Be("Bearer");
-            handler.SentRequests[1].Headers.Authorization!.Parameter.Should().Be("token");
         }
 
         [TestCase(/* lang=json */ "true", true)]

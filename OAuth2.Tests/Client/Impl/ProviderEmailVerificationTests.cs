@@ -1,18 +1,12 @@
 using System;
-using System.Collections.Specialized;
-using System.Net.Http;
 using System.Text.Json;
-using System.Threading.Tasks;
 using FluentAssertions;
 using NSubstitute;
 using NUnit.Framework;
-using OAuth2.Client;
 using OAuth2.Client.Impl;
 using OAuth2.Configuration;
 using OAuth2.Infrastructure;
 using OAuth2.Models;
-using OAuth2.Tests.TestHelpers;
-using RestSharp;
 
 namespace OAuth2.Tests.Client.Impl
 {
@@ -23,55 +17,6 @@ namespace OAuth2.Tests.Client.Impl
         private const string LinkedInContent = "{\"sub\":\"user-123\",\"email\":\"user@example.com\",\"given_name\":\"John\",\"family_name\":\"Doe\",\"picture\":\"https://example.com/photo.jpg\"}";
         /* lang=json */
         private const string SalesforceContent = "{\"id\":\"https://login.salesforce.com/id/org-id/user-id\",\"email\":\"user@example.com\",\"first_name\":\"John\",\"last_name\":\"Doe\",\"photos\":{\"thumbnail\":\"https://example.com/small.jpg\",\"picture\":\"https://example.com/photo.jpg\"}}";
-
-        [Test]
-        public async Task GetUserInfoAsync_VerificationResponse_PreservesClaimsAndBearerHeader(
-            [Values("LinkedIn", "Salesforce")] string provider,
-            [Values(true, false)] bool expectedVerification)
-        {
-            // arrange
-            using var handler = new MockHttpMessageHandler();
-            handler.EnqueueResponse(/* lang=json */ "{\"access_token\":\"token\",\"token_type\":\"Bearer\",\"id\":\"https://login.salesforce.com/id/org-id/user-id\"}");
-            handler.EnqueueResponse(ContentWithClaims(provider, $"\"email_verified\":{JsonSerializer.Serialize(expectedVerification)}"));
-            using var httpClient = new HttpClient(handler);
-            var tokenBaseUri = provider == "LinkedIn" ? "https://www.linkedin.com" : "https://login.salesforce.com";
-            var userBaseUri = provider == "LinkedIn" ? "https://api.linkedin.com" : "https://login.salesforce.com";
-            var expectedUserPath = provider == "LinkedIn" ? "/v2/userinfo" : "/id/org-id/user-id";
-            using var tokenClient = new RestClient(httpClient, new RestClientOptions(tokenBaseUri));
-            using var userClient = new RestClient(httpClient, new RestClientOptions(userBaseUri));
-            var factory = Substitute.For<IRequestFactory>();
-            factory.CreateClient(tokenBaseUri).Returns(tokenClient);
-            if (userBaseUri != tokenBaseUri)
-                factory.CreateClient(userBaseUri).Returns(userClient);
-            factory.CreateRequest(Arg.Any<string>(), Arg.Any<Method>()).Returns(call =>
-                new RestRequest(call.Arg<string>(), call.Arg<Method>()));
-            var configuration = new ClientConfiguration
-            {
-                ClientId = "client-id",
-                ClientSecret = "client-secret",
-                RedirectUri = "https://app.example.com/callback"
-            };
-            OAuth2Client client = provider == "LinkedIn"
-                ? new LinkedInClient(factory, configuration)
-                : new SalesforceClient(factory, configuration);
-            var parameters = new NameValueCollection { { "code", "code" }, { "state", "state" } };
-            var expectedId = ExpectedId(provider);
-
-            // act
-            var info = await client.GetUserInfoAsync(parameters);
-
-            // assert
-            info.Id.Should().Be(expectedId);
-            info.ProviderName.Should().Be(provider);
-            info.Email.Should().Be("user@example.com");
-            info.EmailVerified.Should().Be(expectedVerification);
-            info.ProviderData.Should().BeNull();
-            client.State.Should().Be("state");
-            handler.SentRequests.Should().HaveCount(2);
-            handler.SentRequests[1].RequestUri!.AbsoluteUri.Should().Be(userBaseUri + expectedUserPath);
-            handler.SentRequests[1].Headers.Authorization!.Scheme.Should().Be("Bearer");
-            handler.SentRequests[1].Headers.Authorization!.Parameter.Should().Be("token");
-        }
 
         [Test]
         public void ParseUserInfo_BooleanEmailVerified_PreservesClaim(

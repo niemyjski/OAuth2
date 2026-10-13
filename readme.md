@@ -126,13 +126,17 @@ app.MapGet("/auth/google/callback", async (HttpContext context) =>
 app.Run();
 ```
 
-The library returns callback state but does not validate it. This HTTPS example binds a random state value to a `Secure`, `HttpOnly`, `SameSite=Lax` cookie. The `__Host-` prefix requires `Path=/` and no `Domain`, preventing sibling subdomains from setting that cookie in supporting browsers. [Time-limited Data Protection](https://learn.microsoft.com/en-us/aspnet/core/security/data-protection/consumer-apis/limited-lifetime-payloads) authenticates its contents and enforces expiry on the server; the cookie's `MaxAge` alone cannot do that. Configure a shared, persistent Data Protection key ring when using multiple application instances.
+The library returns callback state but does not validate it. This HTTPS example binds random state to a `Secure`, `HttpOnly`, `SameSite=Lax` cookie. The `__Host-` prefix requires `Path=/` and no `Domain`. Supporting browsers prevent sibling subdomains from setting that cookie.
 
-The example keeps one outstanding login per browser and deletes its cookie after a matching callback, including provider denial. Cookie deletion does not enforce atomic single use against replayed or concurrent requests. Production integrations must consume state through a server-side store with an atomic take operation, or use an authentication handler that supplies the required transaction protections. PKCE and ID-token validation are outside this example. Client instances retain state and tokens; create one per authentication flow and do not share an instance concurrently or register it as a singleton.
+[Time-limited Data Protection](https://learn.microsoft.com/en-us/aspnet/core/security/data-protection/consumer-apis/limited-lifetime-payloads) authenticates the cookie's contents and enforces expiry on the server. The cookie's `MaxAge` alone cannot enforce server-side expiry. For multiple application instances, configure a shared, persistent Data Protection key ring.
+
+The example permits one outstanding login per browser. It deletes the browser cookie after a matching callback, including provider denial. Cookie deletion does not enforce atomic single use against replayed or concurrent requests. For production, consume state through a server-side store with an atomic take operation. Alternatively, use an authentication handler that provides the required transaction protections.
+
+PKCE and ID-token validation are outside this example. Client instances retain state and tokens. Create one instance per authentication flow. Do not share an instance concurrently or register it as a singleton.
 
 ## Email verification and provider-specific data
 
-`UserInfo.EmailVerified` is an optional, provider-reported verification status: `true`, `false`, or `null` when unknown or not mapped by the client. Email verification is an [OpenID Connect standard claim](https://openid.net/specs/openid-connect-core-1_0.html#StandardClaims), not a Google-specific concept. Providers can use different verification methods, so a shared property does not imply identical assurance across providers.
+`UserInfo.EmailVerified` stores the provider's verification status: `true`, `false`, or `null`. Null means unknown or not mapped by the client. Email verification is an [OpenID Connect standard claim](https://openid.net/specs/openid-connect-core-1_0.html#StandardClaims), not a Google-specific concept. Providers can use different verification methods. A shared property does not imply the same level of assurance across providers.
 
 | Client | Source of `EmailVerified` | Scope of support |
 |--------|---------------------------|------------------|
@@ -141,11 +145,13 @@ The example keeps one outstanding login per browser and deletes its cookie after
 | `SalesforceClient` | `email_verified` in the identity URL response | Same strict, nullable handling; the existing identity URL and user ID are preserved. |
 | `GitHubClient` | `verified` on the selected `/user/emails` record | Preserves the existing private-email fallback and selection order. A public profile email alone leaves verification unknown; no extra request or permission is added. |
 
-GitHub verification belongs to the selected address, not any other verified address in the response. Its existing typed email parser and protected `bool Verified` API remain compatible; omitted verification is distinguished from explicitly false. See the [provider-claims reference](docs/provider-claims.md) for endpoint documentation, malformed-value behavior, and providers whose API support requires a separate migration. Clients not listed above leave `EmailVerified` null.
+GitHub verification belongs to the selected address, not another address in the response. The typed email parser and protected `bool Verified` API remain compatible. Omitted verification remains distinct from false. The [provider-claims reference](docs/provider-claims.md) describes endpoints, malformed values, and providers that need separate API migrations. Clients not listed above leave `EmailVerified` null.
 
-Provider-specific string values belong in the optional `UserInfo.ProviderData` dictionary. Interpret its keys together with `ProviderName`; they are not universal claims. The built-in clients copy only explicitly mapped values, not complete provider responses, arbitrary JSON objects, or tokens. There is no shared `HostedDomain` property.
+Provider-specific strings belong in the optional `UserInfo.ProviderData` dictionary. Interpret its keys together with `ProviderName`. These keys are not universal claims. Built-in clients copy only explicitly mapped values. They exclude complete provider responses, arbitrary JSON objects, and tokens. There is no shared `HostedDomain` property.
 
-`GoogleClient` maps only a string-valued `hd` claim to `ProviderData["hd"]`, preserving its contents unchanged, including case, whitespace, and empty strings. An absent, null, or non-string claim leaves `ProviderData` null. This is Google's hosted-domain claim, not a generic tenant identifier or a domain inferred from the email address. Other built-in clients leave `ProviderData` null. Google also permits missing `given_name` and `family_name`; these become null without discarding the remaining user information. See [Google's userinfo claim reference](https://developers.google.com/identity/openid-connect/reference#userinfo).
+`GoogleClient` maps a string-valued `hd` claim to `ProviderData["hd"]`. It preserves the string, including case, whitespace, and empty strings. An absent, null, or non-string claim leaves `ProviderData` null. This value is Google's hosted-domain claim. It is not a generic tenant identifier or a domain derived from the email address. Other built-in clients leave `ProviderData` null.
+
+Google permits missing `given_name` and `family_name`. These values become null without discarding the remaining user information. See [Google's userinfo claim reference](https://developers.google.com/identity/openid-connect/reference#userinfo).
 
 Read Google's hosted domain explicitly in its provider context:
 
@@ -159,9 +165,13 @@ if (userInfo.ProviderName == "Google" &&
 }
 ```
 
-This reads metadata; it does not authorize access or link an account. A correctly typed string is not a validated or approved domain. Use `ProviderName` and `Id` (Google's `sub`) to identify a provider account, and apply an explicit application policy for account linking and domain restrictions. Google's authority over an email address depends on the account type; an external email address can remain marked verified even after ownership changes. A hosted-domain string alone does not establish email authority. See [Google's verification guidance](https://developers.google.com/identity/gsi/web/guides/verify-google-id-token). Preserving userinfo claims does not add ID-token validation or an automatic account-linking flow.
+This code reads metadata. It does not authorize access or link an account. A correctly typed string is not a validated or approved domain. Use `ProviderName` and `Id` (Google's `sub`) to identify a provider account. Apply an explicit application policy for account linking and domain restrictions.
 
-Older serialized `UserInfo` objects deserialize with both new properties null. Existing properties remain available; serialization includes the new properties according to the serializer's naming and null/default settings. With default `System.Text.Json` options, they appear as `EmailVerified` and `ProviderData`, including null values. Provider data stays nested rather than being flattened into the shared model. No provider-specific subclass or polymorphic serializer configuration is required; dictionary-key policies remain the consuming application's responsibility.
+Google's authority over an email address depends on the account type. An external address can remain marked verified after ownership changes. A hosted-domain string alone does not establish email authority. See [Google's verification guidance](https://developers.google.com/identity/gsi/web/guides/verify-google-id-token). Preserving userinfo claims does not add ID-token validation or automatic account linking.
+
+Older serialized `UserInfo` objects deserialize with both new properties null. Existing properties remain available. Serialization follows the serializer's naming and null/default settings. Default `System.Text.Json` options write `EmailVerified` and `ProviderData`, including null values. Provider data remains nested in its dictionary.
+
+Consumers need no provider-specific subclass or polymorphic serializer configuration. The application remains responsible for dictionary-key policies.
 
 ## Supported Services
 
@@ -191,7 +201,7 @@ Older serialized `UserInfo` objects deserialize with both new properties null. E
 | Yahoo | `YahooClient` | **Retired userinfo endpoint** | OAuth 2.0 / Social Directory v1 | `api.login.yahoo.com/oauth2/request_auth` | Not live-verified | [Migration guide](https://developer.yahoo.com/oauth/social-directory-eol/) |
 | Yandex | `YandexClient` | Active | OAuth 2.0 (Yandex ID) | `oauth.yandex.ru/authorize` | 2026-04-23 | [Docs](https://yandex.com/dev/id/doc/en/codes/code-url) |
 
-The DigitalOcean, Uber, and Yahoo statuses describe the client implementations, not the availability of the providers' replacement APIs. Their source and documentation were reviewed on 2026-10-06; no authenticated live migration was tested. See the [migration assessment](docs/provider-claims.md#api-support-that-requires-separate-endpoint-work) for identity, permission, and compatibility requirements. These clients have not been upgraded to the replacement response contracts.
+The DigitalOcean, Uber, and Yahoo statuses describe the current clients. They do not describe the availability of replacement APIs. Source and documentation were reviewed on 2026-10-06. No authenticated live migration was tested. See the [migration assessment](docs/provider-claims.md#api-support-that-requires-separate-endpoint-work) for identity, permission, and compatibility requirements. These clients still use their existing response contracts.
 
 > **Removed providers** (Instagram, Xing): These providers' APIs have been retired or shut down. The client classes have been removed.
 > - **Instagram**: Basic Display API shut down Dec 4, 2024. There is no consumer OAuth replacement — the remaining Instagram APIs are business/creator-only. [Announcement](https://developers.facebook.com/blog/post/2024/09/04/update-on-instagram-basic-display-api/)

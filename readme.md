@@ -1,7 +1,6 @@
 # OAuth2
 
 [![Build](https://github.com/titarenko/OAuth2/workflows/Build/badge.svg)](https://github.com/titarenko/OAuth2/actions)
-[![CodeQL](https://github.com/titarenko/OAuth2/workflows/CodeQL/badge.svg)](https://github.com/titarenko/OAuth2/actions/workflows/codeql.yml)
 [![NuGet](https://img.shields.io/nuget/v/OAuth2.svg?style=flat)](https://www.nuget.org/packages/OAuth2/)
 
 OAuth2 is a library for user authentication using third-party services (OAuth/OAuth2 protocol) such as Google, Facebook and so on.
@@ -25,13 +24,19 @@ dotnet add package OAuth2
 ```csharp
 using System.Collections.Specialized;
 using System.Security.Cryptography;
+using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.WebUtilities;
 using OAuth2.Client.Impl;
 using OAuth2.Configuration;
 using OAuth2.Infrastructure;
 
 var builder = WebApplication.CreateBuilder(args);
+builder.Services.AddDataProtection();
 var app = builder.Build();
+var stateProtector = app.Services.GetRequiredService<IDataProtectionProvider>()
+    .CreateProtector("OAuth2.Example.Google.State.v1")
+    .ToTimeLimitedDataProtector();
+const string stateCookie = "__Host-oauth-google-state";
 
 // Helper to create a GoogleClient instance
 GoogleClient CreateGoogleClient()
@@ -49,13 +54,13 @@ GoogleClient CreateGoogleClient()
 app.MapGet("/auth/google", async (HttpContext context) =>
 {
     var state = WebEncoders.Base64UrlEncode(RandomNumberGenerator.GetBytes(32));
-    context.Response.Cookies.Append("oauth_state", state, new CookieOptions
+    context.Response.Cookies.Append(stateCookie, stateProtector.Protect(state, TimeSpan.FromMinutes(5)), new CookieOptions
     {
         HttpOnly = true,
         Secure = true,
         SameSite = SameSiteMode.Lax,
         MaxAge = TimeSpan.FromMinutes(5),
-        Path = "/auth/google/callback"
+        Path = "/"
     });
 
     var client = CreateGoogleClient();
@@ -66,21 +71,40 @@ app.MapGet("/auth/google", async (HttpContext context) =>
 // Step 2: Handle the callback after authentication
 app.MapGet("/auth/google/callback", async (HttpContext context) =>
 {
-    var code = context.Request.Query["code"].ToString();
     var returnedState = context.Request.Query["state"].ToString();
-    if (string.IsNullOrEmpty(code))
-        return Results.BadRequest("Missing authorization code.");
-    if (!context.Request.Cookies.TryGetValue("oauth_state", out var expectedState) ||
-        string.IsNullOrEmpty(returnedState) ||
-        !string.Equals(returnedState, expectedState, StringComparison.Ordinal))
+    if (!context.Request.Cookies.TryGetValue(stateCookie, out var protectedState) ||
+        string.IsNullOrEmpty(returnedState))
     {
         return Results.BadRequest("Invalid OAuth state.");
     }
 
-    context.Response.Cookies.Delete("oauth_state", new CookieOptions
+    string expectedState;
+    try
     {
-        Path = "/auth/google/callback"
+        expectedState = stateProtector.Unprotect(protectedState);
+    }
+    catch (CryptographicException)
+    {
+        return Results.BadRequest("Invalid or expired OAuth state.");
+    }
+
+    if (!string.Equals(returnedState, expectedState, StringComparison.Ordinal))
+    {
+        return Results.BadRequest("Invalid OAuth state.");
+    }
+
+    context.Response.Cookies.Delete(stateCookie, new CookieOptions
+    {
+        Secure = true,
+        Path = "/"
     });
+
+    if (!string.IsNullOrEmpty(context.Request.Query["error"]))
+        return Results.BadRequest("Authorization was not completed.");
+
+    var code = context.Request.Query["code"].ToString();
+    if (string.IsNullOrEmpty(code))
+        return Results.BadRequest("Missing authorization code.");
 
     var client = CreateGoogleClient();
     var userInfo = await client.GetUserInfoAsync(new NameValueCollection
@@ -95,14 +119,16 @@ app.MapGet("/auth/google/callback", async (HttpContext context) =>
         userInfo.FirstName,
         userInfo.LastName,
         userInfo.Email,
-        AvatarUri = userInfo.AvatarUri?.ToString()
+        AvatarUri = userInfo.PhotoUri
     });
 });
 
 app.Run();
 ```
 
-The library returns callback state but does not validate it. Generate an unpredictable, single-use value, bind it to the initiating browser session, and compare it before exchanging the authorization code. The example uses a short-lived `Secure`, `HttpOnly`, `SameSite=Lax` cookie and assumes HTTPS. Client instances retain state and tokens; create one per authentication flow and do not share an instance concurrently or register it as a singleton.
+The library returns callback state but does not validate it. This HTTPS example binds a random state value to a `Secure`, `HttpOnly`, `SameSite=Lax` cookie. The `__Host-` prefix requires `Path=/` and no `Domain`, preventing sibling subdomains from setting that cookie in supporting browsers. [Time-limited Data Protection](https://learn.microsoft.com/en-us/aspnet/core/security/data-protection/consumer-apis/limited-lifetime-payloads) authenticates its contents and enforces expiry on the server; the cookie's `MaxAge` alone cannot do that. Configure a shared, persistent Data Protection key ring when using multiple application instances.
+
+The example keeps one outstanding login per browser and deletes its cookie after a matching callback, including provider denial. Cookie deletion does not enforce atomic single use against replayed or concurrent requests. Production integrations must consume state through a server-side store with an atomic take operation, or use an authentication handler that supplies the required transaction protections. PKCE and ID-token validation are outside this example. Client instances retain state and tokens; create one per authentication flow and do not share an instance concurrently or register it as a singleton.
 
 ## Email verification and provider-specific data
 

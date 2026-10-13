@@ -1,4 +1,7 @@
+using System.Collections.Specialized;
+using System.Net.Http;
 using System.Text.Json.Nodes;
+using System.Threading.Tasks;
 using FluentAssertions;
 using NSubstitute;
 using NUnit.Framework;
@@ -8,6 +11,7 @@ using OAuth2.Configuration;
 using OAuth2.Infrastructure;
 using OAuth2.Models;
 using OAuth2.Tests.TestHelpers;
+using RestSharp;
 
 namespace OAuth2.Tests.Client.Impl
 {
@@ -51,12 +55,55 @@ namespace OAuth2.Tests.Client.Impl
         }
 
         [Test]
+        public async Task GetUserInfoAsync_SourcedResponse_PreservesClaimsAndBearerHeader()
+        {
+            // Arrange
+            using var handler = new MockHttpMessageHandler();
+            // Documented token-response fields with a dummy access token.
+            // https://developers.google.com/identity/protocols/oauth2/web-server#exchange-authorization-code
+            handler.EnqueueResponse(/* lang=json */ """{"access_token":"test-token","expires_in":3600,"token_type":"Bearer"}""");
+            handler.EnqueueResponse(ProviderResponses.GoogleUserInfo);
+            using var httpClient = new HttpClient(handler);
+            using var tokenClient = new RestClient(httpClient, new RestClientOptions("https://oauth2.googleapis.com"));
+            using var userClient = new RestClient(httpClient, new RestClientOptions("https://www.googleapis.com"));
+            var factory = Substitute.For<IRequestFactory>();
+            factory.CreateClient("https://oauth2.googleapis.com").Returns(tokenClient);
+            factory.CreateClient("https://www.googleapis.com").Returns(userClient);
+            factory.CreateRequest(Arg.Any<string>(), Arg.Any<Method>()).Returns(call =>
+                new RestRequest(call.Arg<string>(), call.Arg<Method>()));
+            var configuration = new ClientConfiguration
+            {
+                ClientId = "client-id", ClientSecret = "client-secret",
+                RedirectUri = "https://app.example.com/callback", Scope = "profile email"
+            };
+            var client = new GoogleClient(factory, configuration);
+            var parameters = new NameValueCollection { { "code", "code" }, { "state", "state" } };
+
+            // Act
+            var info = await client.GetUserInfoAsync(parameters);
+
+            // Assert
+            info.ProviderName.Should().Be("Google");
+            info.Id.Should().Be("111111111111111111111");
+            info.Email.Should().Be("example@gmail.com");
+            info.EmailVerified.Should().BeTrue();
+            info.ProviderData.Should().BeNull();
+            client.State.Should().Be("state");
+            handler.SentRequests.Should().HaveCount(2);
+            handler.SentRequests[0].RequestUri!.AbsoluteUri.Should().Be("https://oauth2.googleapis.com/token");
+            handler.SentRequests[1].RequestUri!.AbsoluteUri.Should().Be("https://www.googleapis.com/oauth2/v3/userinfo");
+            handler.SentRequests[1].Headers.Authorization!.Scheme.Should().Be("Bearer");
+            handler.SentRequests[1].Headers.Authorization!.Parameter.Should().Be("test-token");
+        }
+
+        [Test]
         public void ParseUserInfo_HostedDomainWithoutVerification_DoesNotInferVerification()
         {
             // Arrange
             // Contract variation: omit verification and add the documented optional hd claim.
             var response = JsonNode.Parse(ProviderResponses.GoogleUserInfo)!.AsObject();
             response.Remove("email_verified");
+            response["email"] = "user@example.com";
             response["hd"] = "example.com";
             var content = response.ToJsonString();
 
@@ -164,6 +211,7 @@ namespace OAuth2.Tests.Client.Impl
         {
             // Arrange
             var response = JsonNode.Parse(ProviderResponses.GoogleUserInfo)!.AsObject();
+            response["email"] = "user@example.com";
             response["hd"] = "example.com";
             var content = response.ToJsonString();
             var first = _descendant.ParseUserInfo(content);
@@ -212,7 +260,10 @@ namespace OAuth2.Tests.Client.Impl
             var response = JsonNode.Parse(ProviderResponses.GoogleUserInfo)!.AsObject();
             response["email_verified"] = verified;
             if (hasHostedDomain)
+            {
+                response["email"] = "user@example.com";
                 response["hd"] = "example.com";
+            }
             var content = response.ToJsonString();
 
             // Act
@@ -248,16 +299,11 @@ namespace OAuth2.Tests.Client.Impl
         private class GoogleClientDescendant : GoogleClient
         {
             public GoogleClientDescendant(IRequestFactory factory, IClientConfiguration configuration)
-                : base(factory, configuration)
-            {
-            }
+                : base(factory, configuration) { }
 
             public Endpoint GetAccessCodeServiceEndpoint() => AccessCodeServiceEndpoint;
-
             public Endpoint GetAccessTokenServiceEndpoint() => AccessTokenServiceEndpoint;
-
             public Endpoint GetUserInfoServiceEndpoint() => UserInfoServiceEndpoint;
-
             public new UserInfo ParseUserInfo(string content) => base.ParseUserInfo(content);
         }
     }

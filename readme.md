@@ -19,139 +19,44 @@ Install the [OAuth2 NuGet package](https://www.nuget.org/packages/OAuth2/):
 dotnet add package OAuth2
 ```
 
-## Usage Example (ASP.NET Core Minimal API)
+## Usage
+
+Create a client with your application's registered credentials and redirect URI:
 
 ```csharp
-using System.Collections.Specialized;
-using System.Security.Cryptography;
-using Microsoft.AspNetCore.DataProtection;
-using Microsoft.AspNetCore.WebUtilities;
 using OAuth2.Client.Impl;
 using OAuth2.Configuration;
 using OAuth2.Infrastructure;
 
-var builder = WebApplication.CreateBuilder(args);
-builder.Services.AddDataProtection();
-var app = builder.Build();
-var stateProtector = app.Services.GetRequiredService<IDataProtectionProvider>()
-    .CreateProtector("OAuth2.Example.Google.State.v1")
-    .ToTimeLimitedDataProtector();
-const string stateCookie = "__Host-oauth-google-state";
-
-// Helper to create a GoogleClient instance
-GoogleClient CreateGoogleClient()
+var client = new GoogleClient(new RequestFactory(), new ClientConfiguration
 {
-    return new GoogleClient(new RequestFactory(), new ClientConfiguration
-    {
-        ClientId = app.Configuration["Google:ClientId"]!,
-        ClientSecret = app.Configuration["Google:ClientSecret"]!,
-        RedirectUri = "https://localhost:5001/auth/google/callback",
-        Scope = "profile email"
-    });
-}
-
-// Step 1: Redirect the user to Google's login page
-app.MapGet("/auth/google", async (HttpContext context) =>
-{
-    var state = WebEncoders.Base64UrlEncode(RandomNumberGenerator.GetBytes(32));
-    context.Response.Cookies.Append(stateCookie, stateProtector.Protect(state, TimeSpan.FromMinutes(5)), new CookieOptions
-    {
-        HttpOnly = true,
-        Secure = true,
-        SameSite = SameSiteMode.Lax,
-        MaxAge = TimeSpan.FromMinutes(5),
-        Path = "/"
-    });
-
-    var client = CreateGoogleClient();
-    var loginUri = await client.GetLoginLinkUriAsync(state);
-    return Results.Redirect(loginUri);
+    ClientId = "<client-id>",
+    ClientSecret = "<client-secret>",
+    RedirectUri = "https://localhost:5001/auth/google/callback",
+    Scope = "profile email"
 });
-
-// Step 2: Handle the callback after authentication
-app.MapGet("/auth/google/callback", async (HttpContext context) =>
-{
-    var returnedState = context.Request.Query["state"].ToString();
-    if (!context.Request.Cookies.TryGetValue(stateCookie, out var protectedState) ||
-        string.IsNullOrEmpty(returnedState))
-    {
-        return Results.BadRequest("Invalid OAuth state.");
-    }
-
-    string expectedState;
-    try
-    {
-        expectedState = stateProtector.Unprotect(protectedState);
-    }
-    catch (CryptographicException)
-    {
-        return Results.BadRequest("Invalid or expired OAuth state.");
-    }
-
-    if (!string.Equals(returnedState, expectedState, StringComparison.Ordinal))
-    {
-        return Results.BadRequest("Invalid OAuth state.");
-    }
-
-    context.Response.Cookies.Delete(stateCookie, new CookieOptions
-    {
-        Secure = true,
-        Path = "/"
-    });
-
-    if (!string.IsNullOrEmpty(context.Request.Query["error"]))
-        return Results.BadRequest("Authorization was not completed.");
-
-    var code = context.Request.Query["code"].ToString();
-    if (string.IsNullOrEmpty(code))
-        return Results.BadRequest("Missing authorization code.");
-
-    var client = CreateGoogleClient();
-    var userInfo = await client.GetUserInfoAsync(new NameValueCollection
-    {
-        { "code", code },
-        { "state", returnedState }
-    });
-
-    return Results.Ok(new
-    {
-        userInfo.Id,
-        userInfo.FirstName,
-        userInfo.LastName,
-        userInfo.Email,
-        AvatarUri = userInfo.PhotoUri
-    });
-});
-
-app.Run();
 ```
 
-The library returns callback state but does not validate it. This HTTPS example binds random state to a `Secure`, `HttpOnly`, `SameSite=Lax` cookie. The `__Host-` prefix requires `Path=/` and no `Domain`. Supporting browsers prevent sibling subdomains from setting that cookie.
+Call `GetLoginLinkUriAsync(state)` to obtain the login URL. Your application must generate unpredictable state, bind it to the initiating browser session, and validate the returned value before exchanging the authorization code. After validation, pass the callback parameters as a `NameValueCollection` to `GetUserInfoAsync` to obtain a `UserInfo`.
 
-[Time-limited Data Protection](https://learn.microsoft.com/en-us/aspnet/core/security/data-protection/consumer-apis/limited-lifetime-payloads) authenticates the cookie's contents and enforces expiry on the server. The cookie's `MaxAge` alone cannot enforce server-side expiry. For multiple application instances, configure a shared, persistent Data Protection key ring.
+The library exposes callback state; it does not validate it, manage browser sessions, or validate ID tokens. Use a tested authentication handler or correlation store for those responsibilities. Create a client per authentication flow; do not share an instance concurrently. See [Google's authorization-code flow](https://developers.google.com/identity/protocols/oauth2/web-server).
 
-The example permits one outstanding login per browser. It deletes the browser cookie after a matching callback, including provider denial. Cookie deletion does not enforce atomic single use against replayed or concurrent requests. For production, consume state through a server-side store with an atomic take operation. Alternatively, use an authentication handler that provides the required transaction protections.
+## Email verification
 
-PKCE and ID token validation are outside this example. Client instances retain state and tokens. Create one instance per authentication flow. Do not share an instance concurrently or register it as a singleton.
+`UserInfo.EmailVerified` is nullable: `true` and `false` preserve the provider's assertion; `null` means unknown or not mapped. Verification methods differ between providers. The following clients populate it:
 
-## Email verification and provider-specific data
+| Client | Source |
+|--------|--------|
+| Google | Boolean `email_verified` in [userinfo](https://developers.google.com/identity/openid-connect/reference). |
+| LinkedIn | Optional boolean `email_verified` in [`/v2/userinfo`](https://learn.microsoft.com/en-us/linkedin/consumer/integrations/self-serve/sign-in-with-linkedin-v2). |
+| Salesforce | Boolean `email_verified` in the existing [identity URL response](https://developer.salesforce.com/docs/platform/mobile-sdk/guide/oauth-using-identity-urls.html). |
+| GitHub | `verified` on the selected [`/user/emails`](https://docs.github.com/en/rest/users/emails#list-email-addresses-for-the-authenticated-user) record. A public profile email alone leaves verification unknown without adding a request. |
 
-`UserInfo.EmailVerified` is the provider's nullable verification assertion: `true`, `false`, or `null` when unknown or not mapped. [OpenID Connect defines the claim](https://openid.net/specs/openid-connect-core-1_0.html#StandardClaims), but providers need not use the same verification method.
+Google, LinkedIn, and Salesforce accept only JSON booleans for verification; missing, null, or other types become `null`. GitHub retains its existing typed email parser and primary/verified/first-email selection order. Verification belongs to the selected address, not another address in the response.
 
-| Client | Mapping |
-|--------|---------|
-| `GoogleClient` | Boolean `email_verified` from userinfo. String `hd` is preserved in `ProviderData["hd"]`. [Reference](https://developers.google.com/identity/openid-connect/reference). |
-| `LinkedInClient` | Optional boolean `email_verified` from `/v2/userinfo`. [Reference](https://learn.microsoft.com/en-us/linkedin/consumer/integrations/self-serve/sign-in-with-linkedin-v2). |
-| `SalesforceClient` | Boolean `email_verified` from the existing identity URL response. [Reference](https://developer.salesforce.com/docs/platform/mobile-sdk/guide/oauth-using-identity-urls.html). |
-| `GitHubClient` | `verified` from the exact email record selected by the existing `/user/emails` fallback. A public `/user` email leaves verification unknown without adding a request or scope. [Reference](https://docs.github.com/en/rest/users/emails#list-email-addresses-for-the-authenticated-user). |
+Google also maps a string `hd` to `UserInfo.ProviderData["hd"]`. Interpret this key only for `ProviderName == "Google"`. It is not a domain inferred from the email address or a universal tenant identifier. Other clients leave `ProviderData` null; raw responses and tokens are not copied into it.
 
-Google, LinkedIn, and Salesforce map absent, null, or non-boolean verification to `null`; strings and numbers are not converted. GitHub retains its existing typed parser and primary/verified/first-email selection order. Its protected `bool Verified` API remains compatible while omission remains distinguishable from false.
-
-`ProviderData` contains only explicitly mapped strings, not raw responses or tokens. Only Google currently populates it. Read `hd` only when `ProviderName == "Google"`; it is not a shared tenant identifier or a domain inferred from an email. There is no top-level `HostedDomain` property. Missing or non-string `hd` leaves `ProviderData` null.
-
-Use `ProviderName` and `UserInfo.Id` to identify an account. Neither these mutable DTO values nor a matching email authorize account linking. Apply the application's policy and [Google's email-authority guidance](https://developers.google.com/identity/gsi/web/guides/verify-google-id-token); a historical verification flag does not always prove current mailbox ownership.
-
-Compatibility: missing new members deserialize as null; default `System.Text.Json` output includes `EmailVerified` and `ProviderData`, subject to the caller's serializer options.
+Identify accounts by `ProviderName` and `UserInfo.Id`. Verification metadata does not authorize account linking; apply an explicit application policy and [Google's email-authority guidance](https://developers.google.com/identity/gsi/web/guides/verify-google-id-token).
 
 ## Supported Services
 
@@ -162,7 +67,7 @@ Compatibility: missing new members deserialize as null; default `System.Text.Jso
 | Facebook | `FacebookClient` | Active | Graph API v25.0 | `www.facebook.com/v25.0/dialog/oauth` | 2026-04-23 | [Docs](https://developers.facebook.com/docs/facebook-login/guides/advanced/manual-flow) |
 | Microsoft | `MicrosoftClient` | Active | Identity Platform v2.0 / Graph v1.0 | `login.microsoftonline.com/common/oauth2/v2.0/authorize` | 2026-04-23 | [Docs](https://learn.microsoft.com/en-us/entra/identity-platform/v2-oauth2-auth-code-flow) |
 | Asana | `AsanaClient` | Active | API v1 | `app.asana.com/-/oauth_authorize` | 2026-04-23 | [Docs](https://developers.asana.com/docs/oauth) |
-| DigitalOcean | `DigitalOceanClient` | **Token parser migration needed** | OAuth 2.0 | `cloud.digitalocean.com/v1/oauth/authorize` | 2026-10-13 (docs) | [OAuth API](https://docs.digitalocean.com/reference/api/oauth/) |
+| DigitalOcean | `DigitalOceanClient` | **Legacy token response** | OAuth 2.0 | `cloud.digitalocean.com/v1/oauth/authorize` | 2026-10-13 (docs) | [OAuth API](https://docs.digitalocean.com/reference/api/oauth/) |
 | ExactOnline | `ExactOnlineClient` | Active | REST API v1 | `start.exactonline.nl/api/oauth2/authorize` | 2026-04-23 | [Docs](https://developers.exactonline.com/) |
 | Fitbit | `FitbitClient` | Active | Web API v1 (user profile) | `www.fitbit.com/oauth2/authorize` | 2026-04-23 | [Docs](https://dev.fitbit.com/build/reference/web-api/authorization/) |
 | Foursquare | `FoursquareClient` | **Deprecated** | v2 (OAuth deprecated) | `foursquare.com/oauth2/authorize` | 2026-04-23 | [Docs](https://docs.foursquare.com/) |
@@ -181,7 +86,7 @@ Compatibility: missing new members deserialize as null; default `System.Text.Jso
 | Yahoo | `YahooClient` | **Retired userinfo endpoint** | OAuth 2.0 / Social Directory v1 | `api.login.yahoo.com/oauth2/request_auth` | 2026-10-13 (docs) | [Migration guide](https://developer.yahoo.com/oauth/social-directory-eol/) |
 | Yandex | `YandexClient` | Active | OAuth 2.0 (Yandex ID) | `oauth.yandex.ru/authorize` | 2026-04-23 | [Docs](https://yandex.com/dev/id/doc/en/codes/code-url) |
 
-The three dated documentation checks above are not authenticated login tests. Their runtime endpoints remain unchanged. DigitalOcean's OAuth 2.0 server uses `/v1/oauth`; the separate [`/v2/account`](https://docs.digitalocean.com/reference/api/reference/account/) API supplies verification. The current token example has `info.uuid`, while this client's parser requires `uid`; identity continuity and permissions must be verified before migration. [Uber v3](https://developer.uber.com/docs/consumer-identity/references/api/v3/me-get) requires approval and different profile mapping. [Yahoo's replacement](https://developer.yahoo.com/oauth/social-directory-eol/) maps `guid` to `sub` but changes profile fields according to the granted scopes. Do not silently change stored account identifiers or scopes.
+The three `(docs)` entries record source/documentation checks, not authenticated logins. DigitalOcean's OAuth 2.0 server uses `/v1/oauth`; that is not a protocol downgrade. Its current token example supplies `info.uuid`, while the existing parser expects `uid`. Replacement response contracts for DigitalOcean, Uber, and Yahoo require explicit account-identity and permission compatibility checks.
 
 > **Removed providers** (Instagram, Xing): These providers' APIs have been retired or shut down. The client classes have been removed.
 > - **Instagram**: Basic Display API shut down Dec 4, 2024. There is no consumer OAuth replacement — the remaining Instagram APIs are business/creator-only. [Announcement](https://developers.facebook.com/blog/post/2024/09/04/update-on-instagram-basic-display-api/)

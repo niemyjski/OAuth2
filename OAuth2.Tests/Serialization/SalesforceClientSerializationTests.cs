@@ -6,6 +6,7 @@ using System.Threading.Tasks;
 using FluentAssertions;
 using NSubstitute;
 using NUnit.Framework;
+using OAuth2.Client;
 using OAuth2.Client.Impl;
 using OAuth2.Configuration;
 using OAuth2.Infrastructure;
@@ -65,6 +66,37 @@ namespace OAuth2.Tests.Serialization
             handler.SentRequests[1].RequestUri!.AbsoluteUri.Should().Be("https://login.salesforce.com/id/some-org-id/some-user-id");
             handler.SentRequests[1].Headers.Authorization!.Scheme.Should().Be("Bearer");
             handler.SentRequests[1].Headers.Authorization!.Parameter.Should().Be("test-token");
+        }
+
+        [TestCase("http://login.salesforce.com/id/some-org-id/some-user-id")]
+        [TestCase("//login.salesforce.com/id/some-org-id/some-user-id")]
+        [TestCase("not-a-url")]
+        public async Task GetUserInfoAsync_NonHttpsIdentityUrl_RejectsBeforeSendingToken(string identityUrl)
+        {
+            // Arrange
+            using var handler = new MockHttpMessageHandler();
+            handler.EnqueueResponse($$"""{"access_token":"test-token","token_type":"Bearer","id":"{{identityUrl}}"}""");
+            using var httpClient = new HttpClient(handler);
+            using var tokenClient = new RestClient(httpClient, new RestClientOptions("https://login.salesforce.com"));
+            var factory = Substitute.For<IRequestFactory>();
+            factory.CreateClient("https://login.salesforce.com").Returns(tokenClient);
+            factory.CreateRequest(Arg.Any<string>(), Arg.Any<Method>()).Returns(call =>
+                new RestRequest(call.Arg<string>(), call.Arg<Method>()));
+            var client = new SalesforceClient(factory, new ClientConfiguration
+            {
+                ClientId = "client-id", ClientSecret = "client-secret",
+                RedirectUri = "https://app.example.com/callback"
+            });
+            var parameters = new NameValueCollection { { "code", "code" } };
+
+            // Act
+            var action = () => client.GetUserInfoAsync(parameters);
+
+            // Assert
+            var exception = await action.Should().ThrowAsync<UnexpectedResponseException>();
+            exception.Which.FieldName.Should().Be("id");
+            handler.SentRequests.Should().ContainSingle();
+            handler.SentRequests[0].RequestUri!.AbsoluteUri.Should().Be("https://login.salesforce.com/services/oauth2/token");
         }
 
         [TestCase(true)]

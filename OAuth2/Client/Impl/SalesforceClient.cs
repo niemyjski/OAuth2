@@ -58,6 +58,7 @@ namespace OAuth2.Client.Impl
         /// <summary>
         /// Gets or sets the Salesforce user profile URL returned in the token response.
         /// </summary>
+        /// <remarks>The URL must be absolute and use HTTPS.</remarks>
         public string? SalesforceProfileUrl { get; set; }
 
         /// <summary>
@@ -67,7 +68,12 @@ namespace OAuth2.Client.Impl
         {
             get
             {
-                Uri uri = new Uri(SalesforceProfileUrl!); // Non-null: set by ParseTokenResponse during token exchange
+                if (!Uri.TryCreate(SalesforceProfileUrl, UriKind.Absolute, out var uri) ||
+                    !String.Equals(uri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase))
+                {
+                    throw new UnexpectedResponseException("id");
+                }
+
                 return new Endpoint
                 {
                     BaseUri = uri.GetLeftPart(UriPartial.Authority),

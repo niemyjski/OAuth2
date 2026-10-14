@@ -58,6 +58,8 @@ Google also maps a string `hd` to `UserInfo.ProviderData["hd"]`. Interpret this 
 
 Identify accounts by `ProviderName` and `UserInfo.Id`. Verification metadata does not authorize account linking; apply an explicit application policy and [Google's email-authority guidance](https://developers.google.com/identity/gsi/web/guides/verify-google-id-token).
 
+Older `UserInfo` JSON deserializes with both new properties set to null. Default `System.Text.Json` serialization adds `EmailVerified` and `ProviderData`, including null values. Check consumers that require an exact JSON schema; naming and null-value settings remain under your application's control.
+
 ## Supported Services
 
 | Provider | Client Class | Status | API Version | Auth Endpoint | Last Verified | Docs |

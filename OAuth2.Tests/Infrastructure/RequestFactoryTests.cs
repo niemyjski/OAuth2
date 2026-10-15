@@ -56,6 +56,68 @@ namespace OAuth2.Tests.Infrastructure
             client1.Should().NotBeSameAs(client2);
         }
 
+        [Test]
+        public async Task CreateClient_ConcurrentWrappers_IsolatesCredentials()
+        {
+            // Arrange
+            using var listener = new TcpListener(IPAddress.Loopback, 0);
+            listener.Start();
+            using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            var baseUrl = "http://127.0.0.1:" + ((IPEndPoint)listener.LocalEndpoint).Port;
+            var bothReceived = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var receivedCount = 0;
+            using var first = _factory.CreateClient(baseUrl);
+            using var second = new RequestFactory().CreateClient(baseUrl);
+            first.AddDefaultHeader("Authorization", "Bearer first-test-token");
+            second.AddDefaultHeader("Authorization", "Bearer second-test-token");
+            first.AddDefaultHeader("X-Flow", "first");
+            second.AddDefaultHeader("X-Flow", "second");
+
+            async Task<string> ServeRequestAsync()
+            {
+                using var connection = await listener.AcceptTcpClientAsync(deadline.Token);
+                using var stream = connection.GetStream();
+                using var reader = new StreamReader(stream, Encoding.ASCII, false, 1024, leaveOpen: true);
+                var lines = new List<string>();
+                string? line;
+                while ((line = await reader.ReadLineAsync(deadline.Token)) != "")
+                {
+                    if (line is null)
+                        throw new EndOfStreamException("The request ended before its headers.");
+                    lines.Add(line);
+                }
+
+                if (Interlocked.Increment(ref receivedCount) == 2)
+                    bothReceived.TrySetResult(true);
+                // Neither response completes until both differently authenticated requests are in flight.
+                await bothReceived.Task.WaitAsync(deadline.Token);
+                await stream.WriteAsync(CreateResponse("Connection: close\r\n", false).AsMemory(), deadline.Token);
+                return String.Join("\r\n", lines);
+            }
+
+            var firstServed = ServeRequestAsync();
+            var secondServed = ServeRequestAsync();
+
+            // Act
+            var responses = await Task.WhenAll(
+                first.ExecuteAsync(new RestRequest("/first"), deadline.Token),
+                second.ExecuteAsync(new RestRequest("/second"), deadline.Token));
+            var requests = await Task.WhenAll(firstServed, secondServed);
+
+            // Assert
+            responses.Should().OnlyContain(response => response.StatusCode == HttpStatusCode.OK);
+            var firstRequest = requests.Should().ContainSingle(request => request.StartsWith("GET /first HTTP/1.1")).Which;
+            firstRequest.Should().Contain("Authorization: Bearer first-test-token");
+            firstRequest.Should().Contain("X-Flow: first");
+            firstRequest.Should().NotContain("second-test-token");
+            firstRequest.Should().NotContain("X-Flow: second");
+            var secondRequest = requests.Should().ContainSingle(request => request.StartsWith("GET /second HTTP/1.1")).Which;
+            secondRequest.Should().Contain("Authorization: Bearer second-test-token");
+            secondRequest.Should().Contain("X-Flow: second");
+            secondRequest.Should().NotContain("first-test-token");
+            secondRequest.Should().NotContain("X-Flow: first");
+        }
+
         [TestCase(false)]
         [TestCase(true)]
         public async Task CreateClient_PendingResponse_PreservesTimeoutAndCancellation(bool cancelRequest)

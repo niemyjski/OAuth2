@@ -10,6 +10,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
 using NUnit.Framework;
+using OAuth2.Client;
 using OAuth2.Infrastructure;
 using RestSharp;
 
@@ -80,11 +81,27 @@ namespace OAuth2.Tests.Infrastructure
             response.ResponseStatus.Should().Be(cancelRequest ? ResponseStatus.Aborted : ResponseStatus.TimedOut);
         }
 
-        [TestCase(false, Method.Get)]
-        [TestCase(false, Method.Post)]
-        [TestCase(true, Method.Get)]
-        [TestCase(true, Method.Post)]
-        public async Task CreateClient_Redirect_RestrictsCredentialsToOriginalOrigin(bool crossOrigin, Method method)
+        [TestCase(false, Method.Get, 301)]
+        [TestCase(false, Method.Get, 302)]
+        [TestCase(false, Method.Get, 303)]
+        [TestCase(false, Method.Get, 307)]
+        [TestCase(false, Method.Get, 308)]
+        [TestCase(false, Method.Post, 301)]
+        [TestCase(false, Method.Post, 302)]
+        [TestCase(false, Method.Post, 303)]
+        [TestCase(false, Method.Post, 307)]
+        [TestCase(false, Method.Post, 308)]
+        [TestCase(true, Method.Get, 301)]
+        [TestCase(true, Method.Get, 302)]
+        [TestCase(true, Method.Get, 303)]
+        [TestCase(true, Method.Get, 307)]
+        [TestCase(true, Method.Get, 308)]
+        [TestCase(true, Method.Post, 301)]
+        [TestCase(true, Method.Post, 302)]
+        [TestCase(true, Method.Post, 303)]
+        [TestCase(true, Method.Post, 307)]
+        [TestCase(true, Method.Post, 308)]
+        public async Task CreateClient_Redirect_RestrictsCredentialsToOriginalOrigin(bool crossOrigin, Method method, int statusCode)
         {
             // Arrange
             using var origin = new TcpListener(IPAddress.Loopback, 0);
@@ -96,7 +113,7 @@ namespace OAuth2.Tests.Infrastructure
             var location = crossOrigin
                 ? "http://127.0.0.1:" + ((IPEndPoint)otherOrigin.LocalEndpoint).Port + "/redirected"
                 : "/redirected";
-            var redirect = Encoding.ASCII.GetBytes("HTTP/1.1 307 Temporary Redirect\r\nContent-Length: 0\r\nLocation: " + location + "\r\n\r\n");
+            var redirect = Encoding.ASCII.GetBytes("HTTP/1.1 " + statusCode + " Redirect\r\nContent-Length: 0\r\nLocation: " + location + "\r\n\r\n");
             var responses = crossOrigin ? new[] { redirect } : new[] { redirect, CreateResponse("Connection: close\r\n", false) };
             var served = ServeResponsesAsync(origin, responses, deadline.Token);
             var factory = new RequestFactory(new RequestOptions { Timeout = TimeSpan.FromSeconds(2) });
@@ -125,8 +142,117 @@ namespace OAuth2.Tests.Infrastructure
             {
                 response.StatusCode.Should().Be(HttpStatusCode.OK);
                 requests.Should().HaveCount(2);
-                requests[1].Should().Contain(method == Method.Post ? "client_secret=test-secret" : "access_token=test-token");
+                requests[1].Should().NotContain("Authorization:");
+                if (method == Method.Get)
+                {
+                    requests[1].Should().StartWith("GET /redirected?access_token=test-token HTTP/1.1");
+                }
+                else if (statusCode is 307 or 308)
+                {
+                    requests[1].Should().StartWith("POST /redirected HTTP/1.1");
+                    requests[1].Should().Contain("client_secret=test-secret");
+                }
+                else
+                {
+                    requests[1].Should().StartWith("GET /redirected HTTP/1.1");
+                    requests[1].Should().NotContain("client_secret");
+                }
             }
+        }
+
+        [TestCase("http://localhost:{0}/redirected")]
+        [TestCase("https://127.0.0.1:{0}/redirected")]
+        [TestCase("//localhost:{0}/redirected")]
+        [TestCase("http://127.0.0.1:{0}@localhost:{0}/redirected")]
+        public async Task CreateClient_RedirectAuthority_RejectsDifferentHostOrScheme(string locationTemplate)
+        {
+            // Arrange
+            using var origin = new TcpListener(IPAddress.Loopback, 0);
+            origin.Start();
+            using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            var port = ((IPEndPoint)origin.LocalEndpoint).Port;
+            var location = String.Format(locationTemplate, port);
+            var redirect = Encoding.ASCII.GetBytes("HTTP/1.1 307 Temporary Redirect\r\nContent-Length: 0\r\nLocation: " + location + "\r\n\r\n");
+            var served = ServeResponsesAsync(origin, new[] { redirect }, deadline.Token);
+            using var client = _factory.CreateClient("http://127.0.0.1:" + port);
+            var request = new RestRequest("/initial").AddQueryParameter("access_token", "test-token");
+
+            // Act
+            var response = await client.ExecuteAsync(request, deadline.Token);
+            var requests = await served;
+
+            // Assert
+            requests.Should().ContainSingle();
+            origin.Pending().Should().BeFalse("even aliases of the same loopback address are a different origin");
+            response.ResponseStatus.Should().Be(ResponseStatus.Error);
+            response.ErrorException.Should().BeOfType<HttpRequestException>()
+                .Which.Message.Should().Be("OAuth requests cannot follow redirects to another origin.");
+        }
+
+        [TestCase(Method.Get)]
+        [TestCase(Method.Post)]
+        public async Task CreateClient_RedirectChain_RejectsExternalHopAndRemainsUsable(Method method)
+        {
+            // Arrange
+            using var origin = new TcpListener(IPAddress.Loopback, 0);
+            using var otherOrigin = new TcpListener(IPAddress.Loopback, 0);
+            origin.Start();
+            otherOrigin.Start();
+            using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            var baseUrl = "http://127.0.0.1:" + ((IPEndPoint)origin.LocalEndpoint).Port;
+            var location = "//127.0.0.1:" + ((IPEndPoint)otherOrigin.LocalEndpoint).Port + "/external";
+            var firstRedirect = Encoding.ASCII.GetBytes("HTTP/1.1 307 Temporary Redirect\r\nContent-Length: 0\r\nLocation: /next\r\nSet-Cookie: session=first; Path=/\r\n\r\n");
+            var secondRedirect = Encoding.ASCII.GetBytes("HTTP/1.1 308 Permanent Redirect\r\nContent-Length: 0\r\nLocation: " + location + "\r\n\r\n");
+            var served = ServeResponsesAsync(origin, new[] { firstRedirect, secondRedirect, CreateResponse("Connection: close\r\n", false) }, deadline.Token);
+            var factory = new RequestFactory(new RequestOptions { Timeout = TimeSpan.FromSeconds(2) });
+            using var client = factory.CreateClient(baseUrl);
+            var request = new RestRequest("/initial", method);
+            if (method == Method.Post)
+                request.AddParameter("client_secret", "test-secret");
+            else
+                request.AddQueryParameter("access_token", "test-token");
+
+            // Act
+            var response = await client.ExecuteAsync(request, deadline.Token);
+            var recovery = await client.ExecuteAsync(new RestRequest("/recovery"), deadline.Token);
+            var requests = await served;
+
+            // Assert
+            otherOrigin.Pending().Should().BeFalse("a permitted first hop must not authorize the next origin");
+            response.ResponseStatus.Should().Be(ResponseStatus.Error);
+            response.ErrorException.Should().BeOfType<HttpRequestException>()
+                .Which.Message.Should().Be("OAuth requests cannot follow redirects to another origin.");
+            recovery.StatusCode.Should().Be(HttpStatusCode.OK);
+            requests.Should().HaveCount(3);
+            requests[1].Should().Contain(method == Method.Post ? "client_secret=test-secret" : "access_token=test-token");
+            requests[1].Should().Contain("Cookie: session=first");
+            requests[2].Should().StartWith("GET /recovery HTTP/1.1");
+            requests[2].Should().NotContain("Cookie:");
+            requests[2].Should().NotContain("test-secret");
+            requests[2].Should().NotContain("test-token");
+        }
+
+        [TestCase(null)]
+        [TestCase("http://[")]
+        public async Task CreateClient_RedirectWithoutUsableLocation_RejectsResponse(string? location)
+        {
+            // Arrange
+            using var origin = new TcpListener(IPAddress.Loopback, 0);
+            origin.Start();
+            using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            var locationHeader = location is null ? "" : "Location: " + location + "\r\n";
+            var redirect = Encoding.ASCII.GetBytes("HTTP/1.1 307 Temporary Redirect\r\nContent-Length: 0\r\n" + locationHeader + "\r\n");
+            var served = ServeResponsesAsync(origin, new[] { redirect }, deadline.Token);
+            using var client = _factory.CreateClient("http://127.0.0.1:" + ((IPEndPoint)origin.LocalEndpoint).Port);
+            var request = new RestRequest("/initial").AddQueryParameter("access_token", "test-token");
+
+            // Act
+            Func<Task<RestResponse>> act = () => client.ExecuteAndVerifyAsync(request, deadline.Token);
+
+            // Assert
+            await act.Should().ThrowAsync<UnexpectedResponseException>();
+            (await served).Should().ContainSingle();
+            origin.Pending().Should().BeFalse("an unusable Location must not cause a follow-up request");
         }
 
         [TestCase(false)]

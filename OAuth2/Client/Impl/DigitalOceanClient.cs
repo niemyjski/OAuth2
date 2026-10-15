@@ -12,7 +12,7 @@ namespace OAuth2.Client.Impl
     /// <summary>
     /// DigitalOcean authentication client.
     /// </summary>
-    /// <seealso href="https://docs.digitalocean.com/reference/api/oauth-api/">DigitalOcean OAuth Documentation</seealso>
+    /// <seealso href="https://docs.digitalocean.com/reference/api/oauth/">DigitalOcean OAuth Documentation</seealso>
     public class DigitalOceanClient : OAuth2Client
     {
         private string? _accessToken;
@@ -101,7 +101,10 @@ namespace OAuth2.Client.Impl
             var info = response.GetProperty("info");
             return new UserInfo
             {
-                Id = response.GetProperty("uid").GetStringValue(),
+                // Preserve supplied legacy IDs; the current response uses the user UUID, not team_uuid.
+                Id = response.TryGetProperty("uid", out var legacyId)
+                    ? legacyId.GetStringValue()
+                    : info.GetProperty("uuid").GetString(),
                 FirstName = info.GetProperty("name").GetString(),
                 LastName = "",
                 Email = info.GetStringOrDefault("email")

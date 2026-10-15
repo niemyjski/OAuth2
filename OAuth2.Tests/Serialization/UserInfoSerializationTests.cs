@@ -285,10 +285,10 @@ namespace OAuth2.Tests.Serialization
             {
                 Id = "1",
                 ProviderName = "Test",
-                Email = "e@t.com",
+                Email = "e@example.com",
                 FirstName = "F",
                 LastName = "L",
-                AvatarUri = { Normal = "http://test.com/pic.jpg" }
+                AvatarUri = { Normal = "https://example.com/pic.jpg" }
             };
 
             // Act

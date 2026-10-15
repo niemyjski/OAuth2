@@ -41,9 +41,9 @@ namespace OAuth2.Tests.Serialization
             var response = JsonNode.Parse(ProviderResponses.SalesforceIdentity)!.AsObject();
             response["id"] = identityUrl;
             handler.EnqueueResponse(response.ToJsonString());
-            using var httpClient = new HttpClient(handler);
-            using var tokenClient = new RestClient(httpClient, new RestClientOptions("https://login.salesforce.com"));
-            using var identityClient = new RestClient(httpClient, new RestClientOptions(identityBaseUri));
+            using var httpClient = new HttpClient(handler, disposeHandler: false);
+            using var tokenClient = new RestClient(httpClient, new RestClientOptions("https://login.salesforce.com"), disposeHttpClient: false);
+            using var identityClient = new RestClient(httpClient, new RestClientOptions(identityBaseUri), disposeHttpClient: false);
             var factory = Substitute.For<IRequestFactory>();
             factory.CreateClient("https://login.salesforce.com").Returns(tokenClient);
             factory.CreateClient(identityBaseUri).Returns(identityClient);
@@ -87,8 +87,8 @@ namespace OAuth2.Tests.Serialization
             using var handler = new MockHttpMessageHandler();
             // Deliberately invalid identity URLs must not receive the access token.
             handler.EnqueueResponse(JsonSerializer.Serialize(new { access_token = "test-token", token_type = "Bearer", id = identityUrl }));
-            using var httpClient = new HttpClient(handler);
-            using var tokenClient = new RestClient(httpClient, new RestClientOptions("https://login.salesforce.com"));
+            using var httpClient = new HttpClient(handler, disposeHandler: false);
+            using var tokenClient = new RestClient(httpClient, new RestClientOptions("https://login.salesforce.com"), disposeHttpClient: false);
             var factory = Substitute.For<IRequestFactory>();
             factory.CreateClient("https://login.salesforce.com").Returns(tokenClient);
             factory.CreateRequest(Arg.Any<string>(), Arg.Any<Method>()).Returns(call =>
@@ -129,7 +129,7 @@ namespace OAuth2.Tests.Serialization
         }
 
         [Test]
-        public void ParseUserInfo_MissingEmail_ReturnsNullEmail()
+        public void ParseUserInfo_MissingEmail_PreservesVerification()
         {
             // Arrange
             var response = JsonNode.Parse(ProviderResponses.SalesforceIdentity)!.AsObject();
@@ -142,6 +142,21 @@ namespace OAuth2.Tests.Serialization
             // Assert
             info.Email.Should().BeNull();
             info.EmailVerified.Should().BeTrue();
+        }
+
+        [Test]
+        public void ParseUserInfo_MissingEmail_ReturnsNullEmail()
+        {
+            // Arrange
+            // Legacy synthetic payload with relative photo paths and no email claim.
+            /* lang=json */
+            const string content = @"{""id"":""1"",""first_name"":""A"",""last_name"":""B"",""photos"":{""thumbnail"":""t.jpg"",""picture"":""p.jpg""}}";
+
+            // Act
+            var info = _client.ParseUserInfo(content);
+
+            // Assert
+            info.Email.Should().BeNull();
         }
 
         [Test]
@@ -201,22 +216,7 @@ namespace OAuth2.Tests.Serialization
         }
 
         [Test]
-        public void ParseUserInfo_ValidContent_MapsPhotosToAvatarUri()
-        {
-            // Arrange
-            var content = ProviderResponses.SalesforceIdentity;
-
-            // Act
-            var info = _client.ParseUserInfo(content);
-
-            // Assert
-            info.AvatarUri.Small.Should().Be("https://example.com/profilephoto/thumb");
-            info.AvatarUri.Normal.Should().Be("https://example.com/profilephoto/full");
-            info.AvatarUri.Large.Should().BeNull();
-        }
-
-        [Test]
-        public void ParseUserInfo_ValidContent_ReturnsCorrectFields()
+        public void ParseUserInfo_SourcedResponse_ReturnsCorrectFields()
         {
             // Arrange
             var content = ProviderResponses.SalesforceIdentity;
@@ -231,10 +231,13 @@ namespace OAuth2.Tests.Serialization
             info.Email.Should().Be("user@example.com");
             info.EmailVerified.Should().BeTrue();
             info.ProviderData.Should().BeNull();
+            info.AvatarUri.Small.Should().Be("https://example.com/profilephoto/thumb");
+            info.AvatarUri.Normal.Should().Be("https://example.com/profilephoto/full");
+            info.AvatarUri.Large.Should().BeNull();
         }
 
         [Test]
-        public void ParseUserInfo_ValidContent_SerializesToValidJson()
+        public void ParseUserInfo_SourcedResponse_SerializesToValidJson()
         {
             // Arrange
             var content = ProviderResponses.SalesforceIdentity;
@@ -249,6 +252,60 @@ namespace OAuth2.Tests.Serialization
             doc.RootElement.GetProperty("Email").GetString().Should().Be("user@example.com");
             doc.RootElement.GetProperty("EmailVerified").GetBoolean().Should().BeTrue();
             doc.RootElement.GetProperty("AvatarUri").GetProperty("Small").GetString().Should().Be("https://example.com/profilephoto/thumb");
+        }
+
+        [Test]
+        public void ParseUserInfo_ValidContent_MapsPhotosToAvatarUri()
+        {
+            // Arrange
+            // Legacy synthetic payload; email and photo hosts use reserved example domains.
+            /* lang=json */
+            const string content = @"{""id"":""1"",""email"":""a@example.com"",""first_name"":""A"",""last_name"":""B"",""photos"":{""thumbnail"":""https://example.com/thumb.jpg"",""picture"":""https://example.com/pic.jpg""}}";
+
+            // Act
+            var info = _client.ParseUserInfo(content);
+
+            // Assert
+            info.AvatarUri.Small.Should().Be("https://example.com/thumb.jpg");
+            info.AvatarUri.Normal.Should().Be("https://example.com/pic.jpg");
+            info.AvatarUri.Large.Should().BeNull();
+        }
+
+        [Test]
+        public void ParseUserInfo_ValidContent_ReturnsCorrectFields()
+        {
+            // Arrange
+            // Legacy synthetic payload; email and photo hosts use reserved example domains.
+            /* lang=json */
+            const string content = @"{""id"":""sf-123"",""email"":""admin@example.com"",""first_name"":""Sales"",""last_name"":""Admin"",""photos"":{""thumbnail"":""https://example.com/thumb.jpg"",""picture"":""https://example.com/pic.jpg""}}";
+
+            // Act
+            var info = _client.ParseUserInfo(content);
+
+            // Assert
+            info.Id.Should().Be("sf-123");
+            info.FirstName.Should().Be("Sales");
+            info.LastName.Should().Be("Admin");
+            info.Email.Should().Be("admin@example.com");
+        }
+
+        [Test]
+        public void ParseUserInfo_ValidContent_SerializesToValidJson()
+        {
+            // Arrange
+            // Legacy synthetic payload; email and photo hosts use reserved example domains.
+            /* lang=json */
+            const string content = @"{""id"":""sf-123"",""email"":""admin@example.com"",""first_name"":""Sales"",""last_name"":""Admin"",""photos"":{""thumbnail"":""https://example.com/thumb.jpg"",""picture"":""https://example.com/pic.jpg""}}";
+
+            // Act
+            var info = _client.ParseUserInfo(content);
+            var json = JsonSerializer.Serialize(info);
+            using var doc = JsonDocument.Parse(json);
+
+            // Assert
+            doc.RootElement.GetProperty("Email").GetString().Should().Be("admin@example.com");
+            doc.RootElement.GetProperty("AvatarUri").GetProperty("Small").GetString()
+                .Should().Be("https://example.com/thumb.jpg");
         }
 
         private class TestableSalesforceClient : SalesforceClient

@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Collections.Specialized;
 using System.Net;
@@ -21,6 +22,10 @@ namespace OAuth2.Tests.Client.Impl
     [TestFixture]
     public class GitHubClientTests
     {
+        // Legacy parser regression fixtures retained from the base branch.
+        /* lang=json */
+        private const string ContentWithNoName = "{  \"gists_url\": \"https://api.github.com/users/id/gists{/gist_id}\",  \"repos_url\": \"https://api.github.com/users/id/repos\",  \"following_url\": \"https://api.github.com/users/id/following{/other_user}\",  \"created_at\": \"2011-09-01T05:36:52+00:00\",  \"starred_url\": \"https://api.github.com/users/id/starred{/owner}{/repo}\",  \"login\": \"id\",  \"followers_url\": \"https://api.github.com/users/id/followers\",  \"type\": \"User\",  \"public_gists\": 0,  \"url\": \"https://api.github.com/users/id\",  \"subscriptions_url\": \"https://api.github.com/users/id/subscriptions\",  \"received_events_url\": \"https://api.github.com/users/id/received_events\",  \"followers\": 1,  \"avatar_url\": \"https://avatars.githubusercontent.com/u/123456?v=3\",  \"updated_at\": \"2015-04-1T05:27:31+00:00\",  \"events_url\": \"https://api.github.com/users/id/events{/privacy}\",  \"html_url\": \"https://github.com/id\",  \"following\": 23,  \"site_admin\": false,  \"id\": 123456,  \"public_repos\": 0,  \"gravatar_id\": \"\",  \"organizations_url\": \"https://api.github.com/users/id/orgs\"}";
+
         // Documented token-response fields with a dummy token, not a captured credential.
         // https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/authorizing-oauth-apps
         /* lang=json */
@@ -40,8 +45,8 @@ namespace OAuth2.Tests.Client.Impl
         {
             _handler = new MockHttpMessageHandler();
             _httpClient = new HttpClient(_handler);
-            _tokenClient = new RestClient(_httpClient, new RestClientOptions("https://github.com"));
-            _apiClient = new RestClient(_httpClient, new RestClientOptions("https://api.github.com"));
+            _tokenClient = new RestClient(_httpClient, new RestClientOptions("https://github.com"), disposeHttpClient: false);
+            _apiClient = new RestClient(_httpClient, new RestClientOptions("https://api.github.com"), disposeHttpClient: false);
             _factory = Substitute.For<IRequestFactory>();
             _factory.CreateClient("https://github.com").Returns(_tokenClient);
             _factory.CreateClient("https://api.github.com").Returns(_apiClient);
@@ -106,7 +111,7 @@ namespace OAuth2.Tests.Client.Impl
             // Assert
             info.Id.Should().Be("1");
             info.ProviderName.Should().Be("GitHub");
-            info.Email.Should().Be("octocat@github.com");
+            info.Email.Should().Be("octocat@example.com");
             info.EmailVerified.Should().BeTrue();
             info.ProviderData.Should().BeNull();
             _handler.SentRequests.Should().HaveCount(3);
@@ -188,7 +193,7 @@ namespace OAuth2.Tests.Client.Impl
             // Contract variation: the selected primary record omits verification.
             var emails = JsonNode.Parse(ProviderResponses.GitHubEmails)!.AsArray();
             var secondary = emails[0]!.DeepClone();
-            secondary["email"] = "mona@github.com";
+            secondary["email"] = "secondary@example.com";
             secondary["primary"] = false;
             emails[0]!.AsObject().Remove("verified");
             emails.Add(secondary);
@@ -199,7 +204,7 @@ namespace OAuth2.Tests.Client.Impl
             var info = await _client.GetUserInfoAsync(parameters);
 
             // Assert
-            info.Email.Should().Be("octocat@github.com");
+            info.Email.Should().Be("octocat@example.com");
             info.EmailVerified.Should().BeNull();
         }
 
@@ -211,7 +216,7 @@ namespace OAuth2.Tests.Client.Impl
             var emails = JsonNode.Parse(ProviderResponses.GitHubEmails)!.AsArray();
             emails[0]!["primary"] = false;
             var secondary = emails[0]!.DeepClone();
-            secondary["email"] = "mona@github.com";
+            secondary["email"] = "secondary@example.com";
             emails[0]!["verified"] = false;
             emails.Add(secondary);
             EnqueuePrivateProfile(emails.ToJsonString());
@@ -221,7 +226,7 @@ namespace OAuth2.Tests.Client.Impl
             var info = await _client.GetUserInfoAsync(parameters);
 
             // Assert
-            info.Email.Should().Be("mona@github.com");
+            info.Email.Should().Be("secondary@example.com");
             info.EmailVerified.Should().BeTrue();
         }
 
@@ -233,7 +238,7 @@ namespace OAuth2.Tests.Client.Impl
             emails[0]!["primary"] = false;
             emails[0]!["verified"] = false;
             var secondary = emails[0]!.DeepClone();
-            secondary["email"] = "mona@github.com";
+            secondary["email"] = "secondary@example.com";
             emails.Add(secondary);
             EnqueuePrivateProfile(emails.ToJsonString());
             var parameters = new NameValueCollection { { "code", "code" } };
@@ -242,7 +247,7 @@ namespace OAuth2.Tests.Client.Impl
             var info = await _client.GetUserInfoAsync(parameters);
 
             // Assert
-            info.Email.Should().Be("octocat@github.com");
+            info.Email.Should().Be("octocat@example.com");
             info.EmailVerified.Should().BeFalse();
         }
 
@@ -274,7 +279,7 @@ namespace OAuth2.Tests.Client.Impl
             var info = await _client.GetUserInfoAsync(parameters);
 
             // Assert
-            info.Email.Should().Be("octocat@github.com");
+            info.Email.Should().Be("octocat@example.com");
             info.EmailVerified.Should().BeNull();
             info.ProviderData.Should().BeNull();
             _handler.SentRequests.Should().HaveCount(2);
@@ -296,7 +301,7 @@ namespace OAuth2.Tests.Client.Impl
             var info = await _client.GetUserInfoAsync(parameters);
 
             // Assert
-            info.Email.Should().Be("octocat@github.com");
+            info.Email.Should().Be("octocat@example.com");
             info.EmailVerified.Should().BeNull();
             _handler.SentRequests.Should().HaveCount(6);
         }
@@ -323,7 +328,7 @@ namespace OAuth2.Tests.Client.Impl
             var info = await _client.GetUserInfoAsync(parameters);
 
             // Assert
-            info.Email.Should().Be("octocat@github.com");
+            info.Email.Should().Be("octocat@example.com");
             info.EmailVerified.Should().BeFalse();
         }
 
@@ -334,7 +339,7 @@ namespace OAuth2.Tests.Client.Impl
             // Arrange
             var emails = JsonNode.Parse(ProviderResponses.GitHubEmails)!.AsArray();
             var secondary = emails[0]!.DeepClone();
-            secondary["email"] = "mona@github.com";
+            secondary["email"] = "secondary@example.com";
             secondary["primary"] = false;
             emails[0]!["verified"] = false;
             emails.Insert(secondaryFirst ? 0 : 1, secondary);
@@ -345,7 +350,7 @@ namespace OAuth2.Tests.Client.Impl
             var info = await _client.GetUserInfoAsync(parameters);
 
             // Assert
-            info.Email.Should().Be("octocat@github.com");
+            info.Email.Should().Be("octocat@example.com");
             info.EmailVerified.Should().BeFalse();
         }
 
@@ -370,7 +375,7 @@ namespace OAuth2.Tests.Client.Impl
         }
 
         [Test]
-        public void ParseUserInfo_ValidContent_ReturnsCorrectFields()
+        public void ParseUserInfo_SourcedResponse_ReturnsCorrectFields()
         {
             // Arrange
             var content = ProviderResponses.GitHubUser;
@@ -382,9 +387,26 @@ namespace OAuth2.Tests.Client.Impl
             info.Id.Should().Be("1");
             info.FirstName.Should().Be("monalisa");
             info.LastName.Should().Be("octocat");
-            info.Email.Should().Be("octocat@github.com");
+            info.Email.Should().Be("octocat@example.com");
             info.EmailVerified.Should().BeNull();
             info.PhotoUri.Should().Be("https://github.com/images/error/octocat_happy.gif");
+        }
+
+        [Test]
+        public void ParseUserInfo_ValidContent_ReturnsCorrectFields()
+        {
+            // Arrange
+            // Legacy regression payload from this repository; placeholder login and numeric ID.
+
+            // Act
+            var info = _descendant.ParseUserInfo(ContentWithNoName);
+
+            // Assert
+            info.Id.Should().Be("123456");
+            info.FirstName.Should().Be("id");
+            info.LastName.Should().Be(String.Empty);
+            info.Email.Should().Be(null);
+            info.PhotoUri.Should().Be("https://avatars.githubusercontent.com/u/123456?v=3");
         }
 
         [Test]

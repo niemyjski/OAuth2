@@ -18,6 +18,12 @@ namespace OAuth2.Tests.Client.Impl
     [TestFixture]
     public class GoogleClientTests
     {
+        // Legacy parser regression fixtures retained from the base branch.
+        /* lang=json */
+        private const string Content = "{\"email\":\"email\",\"given_name\":\"name\",\"family_name\":\"surname\",\"sub\":\"id\"}";
+        /* lang=json */
+        private const string ContentWithPicture = "{\"email\":\"email\",\"given_name\":\"name\",\"family_name\":\"surname\",\"sub\":\"id\",\"picture\":\"picture\"}";
+
         private GoogleClientDescendant _descendant = null!;
 
         [SetUp]
@@ -63,9 +69,9 @@ namespace OAuth2.Tests.Client.Impl
             // https://developers.google.com/identity/protocols/oauth2/web-server#exchange-authorization-code
             handler.EnqueueResponse(/* lang=json */ """{"access_token":"test-token","expires_in":3600,"token_type":"Bearer"}""");
             handler.EnqueueResponse(ProviderResponses.GoogleUserInfo);
-            using var httpClient = new HttpClient(handler);
-            using var tokenClient = new RestClient(httpClient, new RestClientOptions("https://oauth2.googleapis.com"));
-            using var userClient = new RestClient(httpClient, new RestClientOptions("https://www.googleapis.com"));
+            using var httpClient = new HttpClient(handler, disposeHandler: false);
+            using var tokenClient = new RestClient(httpClient, new RestClientOptions("https://oauth2.googleapis.com"), disposeHttpClient: false);
+            using var userClient = new RestClient(httpClient, new RestClientOptions("https://www.googleapis.com"), disposeHttpClient: false);
             var factory = Substitute.For<IRequestFactory>();
             factory.CreateClient("https://oauth2.googleapis.com").Returns(tokenClient);
             factory.CreateClient("https://www.googleapis.com").Returns(userClient);
@@ -85,7 +91,7 @@ namespace OAuth2.Tests.Client.Impl
             // Assert
             info.ProviderName.Should().Be("Google");
             info.Id.Should().Be("111111111111111111111");
-            info.Email.Should().Be("example@gmail.com");
+            info.Email.Should().Be("user@example.com");
             info.EmailVerified.Should().BeTrue();
             info.ProviderData.Should().BeNull();
             client.State.Should().Be("state");
@@ -128,7 +134,7 @@ namespace OAuth2.Tests.Client.Impl
             var info = _descendant.ParseUserInfo(content);
 
             // Assert
-            info.Email.Should().Be("example@gmail.com");
+            info.Email.Should().Be("user@example.com");
             info.EmailVerified.Should().BeNull();
             info.ProviderData.Should().BeNull();
         }
@@ -180,7 +186,7 @@ namespace OAuth2.Tests.Client.Impl
             // Assert
             info.EmailVerified.Should().BeNull();
             info.ProviderData.Should().Contain("hd", "example.com");
-            info.Email.Should().Be("example@gmail.com");
+            info.Email.Should().Be("user@example.com");
             info.Id.Should().Be("111111111111111111111");
         }
 
@@ -203,7 +209,20 @@ namespace OAuth2.Tests.Client.Impl
             // Assert
             info.ProviderData.Should().BeNull();
             info.EmailVerified.Should().BeTrue();
-            info.Email.Should().Be("example@gmail.com");
+            info.Email.Should().Be("user@example.com");
+        }
+
+        [Test]
+        public void ParseUserInfo_NoPicture_DoesNotThrow()
+        {
+            // Arrange
+            var content = Content;
+
+            // Act
+            var action = () => _descendant.ParseUserInfo(content);
+
+            // Assert
+            action.Should().NotThrow();
         }
 
         [Test]
@@ -229,7 +248,7 @@ namespace OAuth2.Tests.Client.Impl
         }
 
         [Test]
-        public void ParseUserInfo_ValidContent_ReturnsCorrectFields()
+        public void ParseUserInfo_SourcedResponse_ReturnsCorrectFields()
         {
             // Arrange
             var content = ProviderResponses.GoogleUserInfo;
@@ -239,14 +258,31 @@ namespace OAuth2.Tests.Client.Impl
 
             // Assert
             info.Id.Should().Be("111111111111111111111");
-            info.FirstName.Should().Be("Jared");
-            info.LastName.Should().Be("Hanson");
-            info.Email.Should().Be("example@gmail.com");
+            info.FirstName.Should().Be("Example");
+            info.LastName.Should().Be("User");
+            info.Email.Should().Be("user@example.com");
             info.EmailVerified.Should().BeTrue();
             info.PhotoUri.Should().Be("https://lh3.googleusercontent.com/-XxXXxxXxXXX/AAAAAAAAAAI/AAAAAAAAAAA/0000xxxxx0X/photo.jpg");
             info.AvatarUri.Small.Should().Be(info.PhotoUri + "?sz=36");
             info.AvatarUri.Large.Should().Be(info.PhotoUri + "?sz=300");
             info.ProviderData.Should().BeNull();
+        }
+
+        [Test]
+        public void ParseUserInfo_ValidContent_ReturnsCorrectFields()
+        {
+            // Arrange
+            // Legacy synthetic payload; preserve its minimal shape and literal field values.
+
+            // Act
+            var info = _descendant.ParseUserInfo(ContentWithPicture);
+
+            // Assert
+            info.Id.Should().Be("id");
+            info.FirstName.Should().Be("name");
+            info.LastName.Should().Be("surname");
+            info.Email.Should().Be("email");
+            info.PhotoUri.Should().Be("picture");
         }
 
         [TestCase(true, true)]

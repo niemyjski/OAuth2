@@ -4,24 +4,24 @@ namespace OAuth2.Tests.TestHelpers
     // Tests explicitly mutate these baselines for optional fields and invalid-input cases.
     internal static class ProviderResponses
     {
-        // Sanitized /oauth2/v3/userinfo fixture, reproduced without changing its fields or values:
+        // /oauth2/v3/userinfo fixture; name and email replaced by fictional example values:
         // https://github.com/jaredhanson/passport-google-oauth2/blob/79f9ed6878f1d11150243a1429acb7ba3211e239/test/fixtures/userinfo/userinfo-with-profile-email.json
         // Claim types: https://developers.google.com/identity/openid-connect/reference#userinfo
         /* lang=json */
         public const string GoogleUserInfo = """
             {
               "sub": "111111111111111111111",
-              "name": "Jared Hanson",
-              "given_name": "Jared",
-              "family_name": "Hanson",
+              "name": "Example User",
+              "given_name": "Example",
+              "family_name": "User",
               "picture": "https://lh3.googleusercontent.com/-XxXXxxXxXXX/AAAAAAAAAAI/AAAAAAAAAAA/0000xxxxx0X/photo.jpg",
-              "email": "example@gmail.com",
+              "email": "user@example.com",
               "email_verified": true,
               "locale": "en"
             }
             """;
 
-        // Complete published /v2/userinfo example:
+        // Published /v2/userinfo example; email replaced by a reserved example address:
         // https://learn.microsoft.com/en-us/linkedin/consumer/integrations/self-serve/sign-in-with-linkedin-v2#sample-api-response
         /* lang=json */
         public const string LinkedInUserInfo = """
@@ -32,7 +32,7 @@ namespace OAuth2.Tests.TestHelpers
               "family_name": "Doe",
               "picture": "https://media.licdn-ei.com/dms/image/C5F03AQHqK8v7tB1HCQ/profile-displayphoto-shrink_100_100/0/",
               "locale": "en-US",
-              "email": "doe@email.com",
+              "email": "doe@example.com",
               "email_verified": true
             }
             """;
@@ -63,7 +63,7 @@ namespace OAuth2.Tests.TestHelpers
             }
             """;
 
-        // Selected fields from GitHub's GET /user example; unrelated fields omitted.
+        // Selected fields from GitHub's GET /user example; email redacted to example.com, unrelated fields omitted.
         // https://docs.github.com/en/rest/users/users#get-the-authenticated-user
         /* lang=json */
         public const string GitHubUser = """
@@ -72,17 +72,17 @@ namespace OAuth2.Tests.TestHelpers
               "id": 1,
               "avatar_url": "https://github.com/images/error/octocat_happy.gif",
               "name": "monalisa octocat",
-              "email": "octocat@github.com"
+              "email": "octocat@example.com"
             }
             """;
 
-        // Complete published GET /user/emails example:
+        // Published GET /user/emails example; email redacted to example.com:
         // https://docs.github.com/en/rest/users/emails#list-email-addresses-for-the-authenticated-user
         /* lang=json */
         public const string GitHubEmails = """
             [
               {
-                "email": "octocat@github.com",
+                "email": "octocat@example.com",
                 "verified": true,
                 "primary": true,
                 "visibility": "public"

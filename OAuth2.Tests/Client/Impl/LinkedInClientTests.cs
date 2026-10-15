@@ -18,6 +18,10 @@ namespace OAuth2.Tests.Client.Impl
     [TestFixture]
     public class LinkedInClientTests
     {
+        // Legacy parser regression fixtures retained from the base branch.
+        /* lang=json */
+        private const string Content = @"{""sub"":""id"",""given_name"":""firstname"",""family_name"":""lastname"",""email"":""user@example.com"",""picture"":""https://media.licdn.com/photo.jpg""}";
+
         private LinkedInClientDescendant _descendant = null!;
 
         [SetUp]
@@ -63,9 +67,9 @@ namespace OAuth2.Tests.Client.Impl
             // https://learn.microsoft.com/en-us/linkedin/shared/authentication/authorization-code-flow
             handler.EnqueueResponse(/* lang=json */ """{"access_token":"test-token","expires_in":5184000}""");
             handler.EnqueueResponse(ProviderResponses.LinkedInUserInfo);
-            using var httpClient = new HttpClient(handler);
-            using var tokenClient = new RestClient(httpClient, new RestClientOptions("https://www.linkedin.com"));
-            using var userClient = new RestClient(httpClient, new RestClientOptions("https://api.linkedin.com"));
+            using var httpClient = new HttpClient(handler, disposeHandler: false);
+            using var tokenClient = new RestClient(httpClient, new RestClientOptions("https://www.linkedin.com"), disposeHttpClient: false);
+            using var userClient = new RestClient(httpClient, new RestClientOptions("https://api.linkedin.com"), disposeHttpClient: false);
             var factory = Substitute.For<IRequestFactory>();
             factory.CreateClient("https://www.linkedin.com").Returns(tokenClient);
             factory.CreateClient("https://api.linkedin.com").Returns(userClient);
@@ -85,7 +89,7 @@ namespace OAuth2.Tests.Client.Impl
             // Assert
             info.ProviderName.Should().Be("LinkedIn");
             info.Id.Should().Be("782bbtaQ");
-            info.Email.Should().Be("doe@email.com");
+            info.Email.Should().Be("doe@example.com");
             info.EmailVerified.Should().BeTrue();
             info.ProviderData.Should().BeNull();
             client.State.Should().Be("state");
@@ -109,7 +113,7 @@ namespace OAuth2.Tests.Client.Impl
             var info = _descendant.ParseUserInfo(content);
 
             // Assert
-            info.Email.Should().Be("doe@email.com");
+            info.Email.Should().Be("doe@example.com");
             info.EmailVerified.Should().Be(verified);
             info.ProviderData.Should().BeNull();
         }
@@ -142,7 +146,7 @@ namespace OAuth2.Tests.Client.Impl
             var info = _descendant.ParseUserInfo(content);
 
             // Assert
-            info.Email.Should().Be("doe@email.com");
+            info.Email.Should().Be("doe@example.com");
             info.EmailVerified.Should().BeNull();
         }
 
@@ -164,7 +168,7 @@ namespace OAuth2.Tests.Client.Impl
 
             // Assert
             info.Id.Should().Be("782bbtaQ");
-            info.Email.Should().Be("doe@email.com");
+            info.Email.Should().Be("doe@example.com");
             info.EmailVerified.Should().BeNull();
         }
 
@@ -187,7 +191,7 @@ namespace OAuth2.Tests.Client.Impl
         }
 
         [Test]
-        public void ParseUserInfo_ValidContent_ReturnsCorrectFields()
+        public void ParseUserInfo_SourcedResponse_ReturnsCorrectFields()
         {
             // Arrange
             var content = ProviderResponses.LinkedInUserInfo;
@@ -199,10 +203,27 @@ namespace OAuth2.Tests.Client.Impl
             info.Id.Should().Be("782bbtaQ");
             info.FirstName.Should().Be("John");
             info.LastName.Should().Be("Doe");
-            info.Email.Should().Be("doe@email.com");
+            info.Email.Should().Be("doe@example.com");
             info.EmailVerified.Should().BeTrue();
             info.PhotoUri.Should().Be("https://media.licdn-ei.com/dms/image/C5F03AQHqK8v7tB1HCQ/profile-displayphoto-shrink_100_100/0/");
             info.ProviderData.Should().BeNull();
+        }
+
+        [Test]
+        public void ParseUserInfo_ValidContent_ReturnsCorrectFields()
+        {
+            // Arrange
+            // Legacy synthetic payload, with its email replaced by a reserved example address.
+
+            // Act
+            var info = _descendant.ParseUserInfo(Content);
+
+            // Assert
+            info.Id.Should().Be("id");
+            info.FirstName.Should().Be("firstname");
+            info.LastName.Should().Be("lastname");
+            info.Email.Should().Be("user@example.com");
+            info.AvatarUri.Normal.Should().Be("https://media.licdn.com/photo.jpg");
         }
 
         [Test]

@@ -27,19 +27,26 @@ namespace OAuth2.Tests.Serialization
             _client = new TestableSalesforceClient(Substitute.For<IRequestFactory>(), Substitute.For<IClientConfiguration>());
         }
 
-        [Test]
-        public async Task GetUserInfoAsync_IdentityResponse_PreservesIdentityUrlAndBearerHeader()
+        [TestCase("https://login.salesforce.com")]
+        [TestCase("https://test.salesforce.com")]
+        [TestCase("https://example.my.site.com")]
+        public async Task GetUserInfoAsync_IdentityResponse_PreservesIdentityUrlAndBearerHeader(string identityBaseUri)
         {
             // Arrange
             using var handler = new MockHttpMessageHandler();
-            // Documented token-response fields; dummy token and the sourced fixture's identity URL.
-            // https://developer.salesforce.com/docs/platform/mobile-sdk/guide/oauth-using-identity-urls.html
-            handler.EnqueueResponse(/* lang=json */ """{"access_token":"test-token","token_type":"Bearer","id":"https://login.salesforce.com/id/some-org-id/some-user-id"}""");
-            handler.EnqueueResponse(ProviderResponses.SalesforceIdentity);
+            // Documented identity URL variations for production, sandbox, and Experience Cloud.
+            // https://help.salesforce.com/s/articleView?id=sf.remoteaccess_using_openid.htm&language=en_US&type=0
+            var identityUrl = identityBaseUri + "/id/some-org-id/some-user-id";
+            handler.EnqueueResponse(JsonSerializer.Serialize(new { access_token = "test-token", token_type = "Bearer", id = identityUrl }));
+            var response = JsonNode.Parse(ProviderResponses.SalesforceIdentity)!.AsObject();
+            response["id"] = identityUrl;
+            handler.EnqueueResponse(response.ToJsonString());
             using var httpClient = new HttpClient(handler);
-            using var restClient = new RestClient(httpClient, new RestClientOptions("https://login.salesforce.com"));
+            using var tokenClient = new RestClient(httpClient, new RestClientOptions("https://login.salesforce.com"));
+            using var identityClient = new RestClient(httpClient, new RestClientOptions(identityBaseUri));
             var factory = Substitute.For<IRequestFactory>();
-            factory.CreateClient("https://login.salesforce.com").Returns(restClient);
+            factory.CreateClient("https://login.salesforce.com").Returns(tokenClient);
+            factory.CreateClient(identityBaseUri).Returns(identityClient);
             factory.CreateRequest(Arg.Any<string>(), Arg.Any<Method>()).Returns(call =>
                 new RestRequest(call.Arg<string>(), call.Arg<Method>()));
             var configuration = new ClientConfiguration
@@ -55,27 +62,31 @@ namespace OAuth2.Tests.Serialization
 
             // Assert
             info.ProviderName.Should().Be("Salesforce");
-            info.Id.Should().Be("https://login.salesforce.com/id/some-org-id/some-user-id");
+            info.Id.Should().Be(identityUrl);
             info.Email.Should().Be("user@example.com");
             info.EmailVerified.Should().BeTrue();
             info.ProviderData.Should().BeNull();
-            client.SalesforceProfileUrl.Should().Be("https://login.salesforce.com/id/some-org-id/some-user-id");
+            client.SalesforceProfileUrl.Should().Be(identityUrl);
             client.State.Should().Be("state");
             handler.SentRequests.Should().HaveCount(2);
             handler.SentRequests[0].RequestUri!.AbsoluteUri.Should().Be("https://login.salesforce.com/services/oauth2/token");
-            handler.SentRequests[1].RequestUri!.AbsoluteUri.Should().Be("https://login.salesforce.com/id/some-org-id/some-user-id");
+            handler.SentRequests[1].RequestUri!.AbsoluteUri.Should().Be(identityUrl);
             handler.SentRequests[1].Headers.Authorization!.Scheme.Should().Be("Bearer");
             handler.SentRequests[1].Headers.Authorization!.Parameter.Should().Be("test-token");
         }
 
+        [TestCase(null)]
+        [TestCase("")]
+        [TestCase("file:///identity.json")]
         [TestCase("http://login.salesforce.com/id/some-org-id/some-user-id")]
         [TestCase("//login.salesforce.com/id/some-org-id/some-user-id")]
         [TestCase("not-a-url")]
-        public async Task GetUserInfoAsync_NonHttpsIdentityUrl_RejectsBeforeSendingToken(string identityUrl)
+        public async Task GetUserInfoAsync_NonHttpsIdentityUrl_RejectsBeforeSendingToken(string? identityUrl)
         {
             // Arrange
             using var handler = new MockHttpMessageHandler();
-            handler.EnqueueResponse($$"""{"access_token":"test-token","token_type":"Bearer","id":"{{identityUrl}}"}""");
+            // Deliberately invalid identity URLs must not receive the access token.
+            handler.EnqueueResponse(JsonSerializer.Serialize(new { access_token = "test-token", token_type = "Bearer", id = identityUrl }));
             using var httpClient = new HttpClient(handler);
             using var tokenClient = new RestClient(httpClient, new RestClientOptions("https://login.salesforce.com"));
             var factory = Substitute.For<IRequestFactory>();

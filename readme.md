@@ -37,7 +37,7 @@ var client = new GoogleClient(new RequestFactory(), new ClientConfiguration
 });
 ```
 
-Call `GetLoginLinkUriAsync(state)` to obtain the login URL. Your application must generate unpredictable state, bind it to the initiating browser session, and validate the returned value before exchanging the authorization code. After validation, pass the callback parameters as a `NameValueCollection` to `GetUserInfoAsync` to obtain a `UserInfo`.
+Call `GetLoginLinkUriAsync(state)` to obtain the login URL. Your application must generate unpredictable, single-use state, bind it to the initiating browser session, and validate the returned value before exchanging the authorization code. After validation, pass the callback parameters as a `NameValueCollection` to `GetUserInfoAsync` to obtain a `UserInfo`.
 
 The library exposes callback state; it does not validate it, manage browser sessions, or validate ID tokens. Use a tested authentication handler or correlation store for those responsibilities. Create a client per authentication flow; do not share an instance concurrently. See [Google's authorization-code flow](https://developers.google.com/identity/protocols/oauth2/web-server).
 

@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.IO.Compression;
 using System.Net;
+using System.Net.Http;
 using System.Net.Sockets;
 using System.Text;
 using System.Threading;
@@ -77,6 +78,55 @@ namespace OAuth2.Tests.Infrastructure
 
             // Assert
             response.ResponseStatus.Should().Be(cancelRequest ? ResponseStatus.Aborted : ResponseStatus.TimedOut);
+        }
+
+        [TestCase(false, Method.Get)]
+        [TestCase(false, Method.Post)]
+        [TestCase(true, Method.Get)]
+        [TestCase(true, Method.Post)]
+        public async Task CreateClient_Redirect_RestrictsCredentialsToOriginalOrigin(bool crossOrigin, Method method)
+        {
+            // Arrange
+            using var origin = new TcpListener(IPAddress.Loopback, 0);
+            using var otherOrigin = new TcpListener(IPAddress.Loopback, 0);
+            origin.Start();
+            otherOrigin.Start();
+            using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            var baseUrl = "http://127.0.0.1:" + ((IPEndPoint)origin.LocalEndpoint).Port;
+            var location = crossOrigin
+                ? "http://127.0.0.1:" + ((IPEndPoint)otherOrigin.LocalEndpoint).Port + "/redirected"
+                : "/redirected";
+            var redirect = Encoding.ASCII.GetBytes("HTTP/1.1 307 Temporary Redirect\r\nContent-Length: 0\r\nLocation: " + location + "\r\n\r\n");
+            var responses = crossOrigin ? new[] { redirect } : new[] { redirect, CreateResponse("Connection: close\r\n", false) };
+            var served = ServeResponsesAsync(origin, responses, deadline.Token);
+            var factory = new RequestFactory(new RequestOptions { Timeout = TimeSpan.FromSeconds(2) });
+            using var client = factory.CreateClient(baseUrl);
+            var request = new RestRequest("/initial", method);
+            if (method == Method.Post)
+                request.AddParameter("client_secret", "test-secret");
+            else
+                request.AddQueryParameter("access_token", "test-token");
+            request.AddHeader("Authorization", "Bearer test-token");
+
+            // Act
+            var response = await client.ExecuteAsync(request, deadline.Token);
+            var requests = await served;
+
+            // Assert
+            otherOrigin.Pending().Should().BeFalse("credentials must never reach the other origin");
+            if (crossOrigin)
+            {
+                requests.Should().ContainSingle();
+                response.ResponseStatus.Should().Be(ResponseStatus.Error);
+                response.ErrorException.Should().BeOfType<HttpRequestException>()
+                    .Which.Message.Should().Be("OAuth requests cannot follow redirects to another origin.");
+            }
+            else
+            {
+                response.StatusCode.Should().Be(HttpStatusCode.OK);
+                requests.Should().HaveCount(2);
+                requests[1].Should().Contain(method == Method.Post ? "client_secret=test-secret" : "access_token=test-token");
+            }
         }
 
         [TestCase(false)]
@@ -217,7 +267,16 @@ namespace OAuth2.Tests.Infrastructure
                         throw new IOException("The shared HTTP connection closed before the next request.");
                     lines.Add(line);
                 }
-                requests.Add(String.Join("\r\n", lines));
+                var contentLength = 0;
+                foreach (var header in lines)
+                {
+                    if (header.StartsWith("Content-Length:", StringComparison.OrdinalIgnoreCase))
+                        contentLength = Int32.Parse(header.Substring("Content-Length:".Length).Trim());
+                }
+                var body = new char[contentLength];
+                if (contentLength > 0 && await reader.ReadBlockAsync(body.AsMemory(), cancellationToken) != contentLength)
+                    throw new EndOfStreamException("The request body ended before Content-Length.");
+                requests.Add(String.Join("\r\n", lines) + "\r\n\r\n" + new string(body));
                 await stream.WriteAsync(response.AsMemory(), cancellationToken);
             }
             return requests.ToArray();

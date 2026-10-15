@@ -1,4 +1,7 @@
 using System;
+using System.Net;
+using System.Net.Http;
+using System.Threading;
 using RestSharp;
 
 namespace OAuth2.Infrastructure
@@ -8,6 +11,8 @@ namespace OAuth2.Infrastructure
     /// </summary>
     public class RequestFactory : IRequestFactory
     {
+        // Share connections across factories, but keep RestClient request settings separate.
+        private static readonly HttpClient SharedHttpClient = CreateSharedHttpClient();
         private readonly RequestOptions? _options;
 
         /// <summary>
@@ -29,6 +34,7 @@ namespace OAuth2.Infrastructure
         /// <summary>
         /// Returns new REST client instance with the specified base URL.
         /// </summary>
+        /// <remarks>Disposing the returned client does not dispose the shared transport.</remarks>
         public RestClient CreateClient(string baseUrl)
         {
             if (String.IsNullOrEmpty(baseUrl))
@@ -39,7 +45,7 @@ namespace OAuth2.Infrastructure
             if (_options?.Timeout is not null)
                 restClientOptions.Timeout = _options.Timeout.Value;
 
-            return new RestClient(restClientOptions);
+            return new RestClient(SharedHttpClient, restClientOptions, disposeHttpClient: false);
         }
 
         /// <summary>
@@ -62,6 +68,37 @@ namespace OAuth2.Infrastructure
                 throw new ArgumentException("Value cannot be null or empty.", nameof(resource));
 
             return new RestRequest(resource, method);
+        }
+
+        private static HttpClient CreateSharedHttpClient()
+        {
+            HttpMessageHandler handler;
+#if NET8_0_OR_GREATER
+            if (!OperatingSystem.IsBrowser())
+            {
+                handler = new SocketsHttpHandler
+                {
+                    AllowAutoRedirect = false,
+                    UseCookies = false,
+                    AutomaticDecompression = DecompressionMethods.All,
+                    PooledConnectionLifetime = TimeSpan.FromMinutes(2)
+                };
+            }
+            else
+            {
+                handler = new HttpClientHandler { AllowAutoRedirect = false };
+            }
+#else
+            // Preserve RestSharp's netstandard2.0 defaults and platform handler support.
+            handler = new HttpClientHandler
+            {
+                AllowAutoRedirect = false,
+                UseCookies = false,
+                AutomaticDecompression = DecompressionMethods.GZip
+            };
+#endif
+            // RestSharp applies each request/client timeout with its own cancellation token.
+            return new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
         }
     }
 }

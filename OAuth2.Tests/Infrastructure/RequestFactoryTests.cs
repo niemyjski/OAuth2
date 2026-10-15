@@ -1,7 +1,16 @@
 using System;
+using System.Collections.Generic;
+using System.IO;
+using System.IO.Compression;
+using System.Net;
+using System.Net.Sockets;
+using System.Text;
+using System.Threading;
+using System.Threading.Tasks;
 using FluentAssertions;
 using NUnit.Framework;
 using OAuth2.Infrastructure;
+using RestSharp;
 
 namespace OAuth2.Tests.Infrastructure
 {
@@ -13,49 +22,117 @@ namespace OAuth2.Tests.Infrastructure
         [SetUp]
         public void SetUp()
         {
-            // arrange
             _factory = new RequestFactory();
+        }
+
+        [Test]
+        public void Constructor_WithNullOptions_ThrowsArgumentNullException()
+        {
+            // Arrange
+            // The factory is initialized in SetUp.
+
+            // Act
+            Action act = () => new RequestFactory(null!);
+
+            // Assert
+            act.Should().Throw<ArgumentNullException>().WithParameterName("options");
         }
 
         [Test]
         public void CreateClient_CalledTwice_ReturnsNewInstances()
         {
-            // act
-            var client1 = _factory.CreateClient("https://localhost");
-            var client2 = _factory.CreateClient("https://localhost");
+            // Arrange
+            // The factory is initialized in SetUp.
 
-            // assert
+            // Act
+            using var client1 = _factory.CreateClient("https://localhost");
+            using var client2 = _factory.CreateClient("https://localhost");
+
+            // Assert
             client1.Should().NotBeNull();
             client2.Should().NotBeNull();
             client1.Should().NotBeSameAs(client2);
         }
 
-        [Test]
-        public void CreateClient_WithTimeout_AppliesTimeout()
+        [TestCase(false)]
+        [TestCase(true)]
+        public async Task CreateClient_PendingResponse_PreservesTimeoutAndCancellation(bool cancelRequest)
         {
-            // arrange
-            var timeout = TimeSpan.FromSeconds(5);
-            var factory = new RequestFactory(new RequestOptions { Timeout = timeout });
+            // Arrange
+            using var listener = new TcpListener(IPAddress.Loopback, 0);
+            listener.Start();
+            using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(deadline.Token);
+            var accepted = listener.AcceptTcpClientAsync(deadline.Token);
+            var baseUrl = "http://127.0.0.1:" + ((IPEndPoint)listener.LocalEndpoint).Port;
+            var factory = new RequestFactory(new RequestOptions { Timeout = TimeSpan.FromSeconds(1) });
+            using var client = factory.CreateClient(baseUrl);
 
-            // act
-            var client = factory.CreateClient("https://localhost");
+            // Act
+            var pending = client.ExecuteAsync(new RestRequest("/pending"), cancellation.Token);
+            using var connection = await accepted;
+            if (cancelRequest)
+                cancellation.Cancel();
+            var response = await pending;
 
-            // assert
-            client.Should().NotBeNull();
-            client.Options.Timeout.Should().Be(timeout);
+            // Assert
+            response.ResponseStatus.Should().Be(cancelRequest ? ResponseStatus.Aborted : ResponseStatus.TimedOut);
+        }
+
+        [TestCase(false)]
+        [TestCase(true)]
+        public async Task CreateClient_SeparateWrappers_ReusesConnectionAndIsolatesCredentials(bool gzipResponse)
+        {
+            // Arrange
+            using var listener = new TcpListener(IPAddress.Loopback, 0);
+            listener.Start();
+            using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            var baseUrl = "http://127.0.0.1:" + ((IPEndPoint)listener.LocalEndpoint).Port;
+            var served = ServeResponsesAsync(listener, new[]
+            {
+                CreateResponse("Set-Cookie: session=first; Path=/\r\n", false),
+                CreateResponse("Connection: close\r\n", gzipResponse)
+            }, deadline.Token);
+            var firstFactory = new RequestFactory(new RequestOptions { Timeout = TimeSpan.FromSeconds(5) });
+            var secondFactory = new RequestFactory(new RequestOptions { Timeout = TimeSpan.FromSeconds(8) });
+
+            // Act
+            RestResponse firstResponse;
+            using (var first = firstFactory.CreateClient(baseUrl))
+            {
+                first.AddDefaultHeader("Authorization", "Bearer test-token");
+                firstResponse = await first.ExecuteAsync(new RestRequest("/first"), deadline.Token);
+            }
+            using var second = secondFactory.CreateClient(baseUrl);
+            var secondResponse = await second.ExecuteAsync(new RestRequest("/second"), deadline.Token);
+            var requests = await served;
+
+            // Assert
+            firstResponse.StatusCode.Should().Be(HttpStatusCode.OK);
+            secondResponse.StatusCode.Should().Be(HttpStatusCode.OK);
+            secondResponse.Content.Should().Be("ok");
+            second.Options.Timeout.Should().Be(TimeSpan.FromSeconds(8));
+            requests.Should().HaveCount(2);
+            requests[0].Should().StartWith("GET /first HTTP/1.1");
+            requests[0].Should().Contain("Authorization: Bearer test-token");
+            requests[1].Should().StartWith("GET /second HTTP/1.1");
+            requests[1].Should().NotContain("Authorization:");
+            requests[1].Should().NotContain("Cookie:");
+            requests[0].Should().Contain("User-Agent: RestSharp/");
+            requests[1].Should().Contain("User-Agent: RestSharp/");
         }
 
         [Test]
         public void CreateClient_WithNullTimeout_PreservesDefault()
         {
-            // arrange
+            // Arrange
             var factory = new RequestFactory(new RequestOptions());
-            var defaultClient = _factory.CreateClient("https://localhost");
+            using var defaultClient = _factory.CreateClient("https://localhost");
 
-            // act
-            var client = factory.CreateClient("https://localhost");
+            // Act
+            using var client = factory.CreateClient("https://localhost");
 
-            // assert
+            // Assert
             client.Should().NotBeNull();
             client.Options.Timeout.Should().Be(defaultClient.Options.Timeout);
         }
@@ -63,38 +140,87 @@ namespace OAuth2.Tests.Infrastructure
         [Test]
         public void CreateClient_WithoutOptions_DoesNotSetTimeout()
         {
-            // arrange
-            var defaultClient = _factory.CreateClient("https://localhost");
+            // Arrange
+            using var defaultClient = _factory.CreateClient("https://localhost");
 
-            // act
-            var client = _factory.CreateClient("https://localhost");
+            // Act
+            using var client = _factory.CreateClient("https://localhost");
 
-            // assert
+            // Assert
             client.Should().NotBeNull();
             client.Options.Timeout.Should().Be(defaultClient.Options.Timeout);
         }
 
         [Test]
-        public void Constructor_WithNullOptions_ThrowsArgumentNullException()
+        public void CreateClient_WithTimeout_AppliesTimeout()
         {
-            // act
-            Action act = () => new RequestFactory(null!);
+            // Arrange
+            var timeout = TimeSpan.FromSeconds(5);
+            var factory = new RequestFactory(new RequestOptions { Timeout = timeout });
 
-            // assert
-            act.Should().Throw<ArgumentNullException>().WithParameterName("options");
+            // Act
+            using var client = factory.CreateClient("https://localhost");
+
+            // Assert
+            client.Should().NotBeNull();
+            client.Options.Timeout.Should().Be(timeout);
         }
 
         [Test]
         public void CreateRequest_CalledTwice_ReturnsNewInstances()
         {
-            // act
+            // Arrange
+            // The factory is initialized in SetUp.
+
+            // Act
             var request1 = _factory.CreateRequest("/resource");
             var request2 = _factory.CreateRequest("/resource");
 
-            // assert
+            // Assert
             request1.Should().NotBeNull();
             request2.Should().NotBeNull();
             request1.Should().NotBeSameAs(request2);
+        }
+
+        private static byte[] CreateResponse(string headers, bool gzip)
+        {
+            var body = Encoding.UTF8.GetBytes("ok");
+            if (gzip)
+            {
+                using var output = new MemoryStream();
+                using (var compressor = new GZipStream(output, CompressionMode.Compress, leaveOpen: true))
+                    compressor.Write(body, 0, body.Length);
+                body = output.ToArray();
+                headers += "Content-Encoding: gzip\r\n";
+            }
+            var prefix = Encoding.ASCII.GetBytes("HTTP/1.1 200 OK\r\nContent-Length: " + body.Length + "\r\n" + headers + "\r\n");
+            var response = new byte[prefix.Length + body.Length];
+            prefix.CopyTo(response, 0);
+            body.CopyTo(response, prefix.Length);
+            return response;
+        }
+
+        private static async Task<string[]> ServeResponsesAsync(TcpListener listener, byte[][] responses, CancellationToken cancellationToken)
+        {
+            // Accept exactly one connection: both requests must reuse it, even after wrapper disposal.
+            using var connection = await listener.AcceptTcpClientAsync(cancellationToken);
+            using var stream = connection.GetStream();
+            using var reader = new StreamReader(stream, Encoding.ASCII, false, 1024, leaveOpen: true);
+            var requests = new List<string>();
+            foreach (var response in responses)
+            {
+                var lines = new List<string>();
+                string? line;
+                while ((line = await reader.ReadLineAsync(cancellationToken)) != "")
+                {
+                    if (line is null)
+                        throw new IOException("The shared HTTP connection closed before the next request.");
+                    lines.Add(line);
+                }
+                requests.Add(String.Join("\r\n", lines));
+                await stream.WriteAsync(response.AsMemory(), cancellationToken);
+            }
+            return requests.ToArray();
         }
     }
 }

@@ -41,6 +41,10 @@ Call `GetLoginLinkUriAsync(state)` to obtain the login URL. Your application mus
 
 The library exposes callback state; it does not validate it, manage browser sessions, or validate ID tokens. Use a tested authentication handler or correlation store for those responsibilities. Create a client per authentication flow; do not share an instance concurrently. See [Google's authorization-code flow](https://developers.google.com/identity/protocols/oauth2/web-server).
 
+`RequestFactory` shares its HTTP transport across authentication flows. Each call to `CreateClient` returns a separate `RestClient`; headers, authenticators, and timeouts stay on that client. Disposing it leaves the shared transport available. On .NET 8 and .NET 10, pooled connections expire after two minutes so new connections can refresh DNS. The netstandard2.0 build uses the platform HTTP handler; its connection and DNS lifetime follow that platform. Handler cookies are disabled so they do not cross authentication flows. RestSharp still handles explicit request cookies and redirects.
+
+Custom `IRequestFactory` implementations retain ownership of the clients and handlers they supply. Use an application-managed transport for custom DNS, proxy, certificate, or connection-lifetime requirements.
+
 ## Email verification
 
 `UserInfo.EmailVerified` is nullable: `true` and `false` preserve the provider's assertion; `null` means unknown or not mapped. Verification methods differ between providers. The following clients populate it:

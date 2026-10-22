@@ -43,8 +43,13 @@ namespace OAuth2.Models
         }
 
         /// <summary>
-        /// Unique identifier.
+        /// Identifier assigned by the provider.
         /// </summary>
+        /// <remarks>
+        /// Use this identifier together with <see cref="ProviderName"/> to look up an already linked account.
+        /// Google maps its <c>sub</c> claim here; that value remains unchanged when the user's email address changes.
+        /// </remarks>
+        /// <seealso href="https://developers.google.com/identity/openid-connect/reference#userinfo">Google userinfo claims</seealso>
         public string? Id { get; set; }
 
         /// <summary>
@@ -56,17 +61,27 @@ namespace OAuth2.Models
         public string? ProviderName { get; set; }
 
         /// <summary>
-        /// Email address.
+        /// Email address reported by the provider.
         /// </summary>
+        /// <remarks>
+        /// Users or administrators may change this address, and a mailbox can later be reassigned to another person.
+        /// Successful OAuth authentication does not guarantee email verification; providers may return editable or
+        /// unverified profile addresses. Check <see cref="EmailVerified"/> and the provider's email-authority rules
+        /// before using the address for account linking or recovery. Use <see cref="Id"/> for persistent account lookup.
+        /// </remarks>
         public string? Email { get; set; }
 
         /// <summary>
-        /// Whether the provider reports the email address as verified, or null when verification is unknown or not mapped by the client.
+        /// Whether the provider reports the email address as verified.
         /// </summary>
         /// <remarks>
-        /// Verification methods and email authority depend on the provider. This value alone does not authorize linking to an existing local account.
+        /// <c>true</c> means verified, <c>false</c> means unverified, and <c>null</c> means unknown or not mapped by the client.
+        /// Treat only <c>is true</c> as an affirmative assertion. Verification methods and email authority depend on the provider.
+        /// For Google accounts with a non-Gmail address and no <c>hd</c> claim, even <c>true</c> can reflect historical
+        /// verification after mailbox ownership has changed. This value alone does not authorize linking to an existing local account.
         /// </remarks>
         /// <seealso href="https://openid.net/specs/openid-connect-core-1_0.html#StandardClaims">OpenID Connect standard claims</seealso>
+        /// <seealso href="https://developers.google.com/identity/gsi/web/guides/verify-google-id-token">Google email-authority guidance</seealso>
         public bool? EmailVerified { get; set; }
 
         /// <summary>
@@ -74,8 +89,11 @@ namespace OAuth2.Models
         /// </summary>
         /// <remarks>
         /// Keys and their meanings are scoped to <see cref="ProviderName"/>. This is not a copy of the complete provider response.
-        /// For Google, the "hd" entry contains the hosted-domain claim unchanged; its presence alone does not establish email authority.
+        /// For Google, <c>hd</c> contains the hosted-domain claim unchanged. To restrict access to a Google Workspace domain,
+        /// check the provider and compare this claim with the application's expected domain; the email suffix does not prove membership.
+        /// The presence of <c>hd</c> alone does not establish email verification or authorize account linking.
         /// </remarks>
+        /// <seealso href="https://developers.google.com/identity/openid-connect/reference#userinfo">Google userinfo claims</seealso>
         public Dictionary<string, string>? ProviderData { get; set; }
 
         /// <summary>

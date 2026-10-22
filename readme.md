@@ -41,6 +41,12 @@ Call `GetLoginLinkUriAsync(state)` to obtain the login URL. Your application mus
 
 The library exposes callback state; it does not validate it, manage browser sessions, or validate ID tokens. Use a tested authentication handler or correlation store for those responsibilities. Create a client per authentication flow; do not share an instance concurrently. See [Google's authorization-code flow](https://developers.google.com/identity/protocols/oauth2/web-server).
 
+`RequestFactory` shares its HTTP transport across authentication flows. Each call to `CreateClient` returns a separate `RestClient`; headers, authenticators, and timeouts stay on that client. Disposing it leaves the shared transport available. On Windows, Linux, and macOS with .NET 8 or .NET 10, pooled connections expire after two minutes so new connections can refresh DNS. Mobile, browser, and netstandard2.0 builds retain their platform handler. Outside the browser, handler cookies are disabled so they do not cross authentication flows. RestSharp still handles explicit request cookies and same-origin redirects.
+
+The default transport rejects redirects to another scheme, host, or port before RestSharp can forward an OAuth form body or token-bearing query string. A provider that requires a redirect to another origin must use its documented endpoint directly or an application-owned `IRequestFactory` with an explicit redirect policy. Browser redirect behavior also depends on the browser's fetch implementation and CORS policy.
+
+Custom `IRequestFactory` implementations retain ownership of the clients and handlers they supply. Use an application-managed transport for custom DNS, proxy, certificate, or connection-lifetime requirements.
+
 ## Email verification
 
 `UserInfo.EmailVerified` is nullable: `true` and `false` preserve the provider's assertion; `null` means unknown or not mapped. Verification methods differ between providers. The following clients populate it:

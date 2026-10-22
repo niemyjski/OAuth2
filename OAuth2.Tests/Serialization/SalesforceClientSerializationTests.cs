@@ -100,11 +100,8 @@ namespace OAuth2.Tests.Serialization
             });
             var parameters = new NameValueCollection { { "code", "code" } };
 
-            // Act
-            var action = () => client.GetUserInfoAsync(parameters);
-
-            // Assert
-            var exception = await action.Should().ThrowAsync<UnexpectedResponseException>();
+            // Act & Assert
+            var exception = await client.Awaiting(x => x.GetUserInfoAsync(parameters)).Should().ThrowAsync<UnexpectedResponseException>();
             exception.Which.FieldName.Should().Be("id");
             handler.SentRequests.Should().ContainSingle();
             handler.SentRequests[0].RequestUri!.AbsoluteUri.Should().Be("https://login.salesforce.com/services/oauth2/token");

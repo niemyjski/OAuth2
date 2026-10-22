@@ -137,11 +137,8 @@ namespace OAuth2.Tests.Client.Impl
             _handler.EnqueueResponse(statusCode, ProviderResponses.GitHubEmails);
             var parameters = new NameValueCollection { { "code", "code" } };
 
-            // Act
-            var action = () => _client.GetUserInfoAsync(parameters);
-
-            // Assert
-            var exception = await action.Should().ThrowAsync<UnexpectedResponseException>();
+            // Act & Assert
+            var exception = await _client.Awaiting(x => x.GetUserInfoAsync(parameters)).Should().ThrowAsync<UnexpectedResponseException>();
             exception.Which.Response!.StatusCode.Should().Be(statusCode);
             _handler.SentRequests.Should().HaveCount(3);
         }
@@ -178,11 +175,8 @@ namespace OAuth2.Tests.Client.Impl
             EnqueuePrivateProfile(emails.ToJsonString());
             var parameters = new NameValueCollection { { "code", "code" } };
 
-            // Act
-            var action = () => _client.GetUserInfoAsync(parameters);
-
-            // Assert
-            await action.Should().ThrowAsync<JsonException>();
+            // Act & Assert
+            await _client.Awaiting(x => x.GetUserInfoAsync(parameters)).Should().ThrowAsync<JsonException>();
             _handler.SentRequests.Should().HaveCount(3);
         }
 

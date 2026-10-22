@@ -218,11 +218,8 @@ namespace OAuth2.Tests.Client.Impl
             // Arrange
             var content = Content;
 
-            // Act
-            var action = () => _descendant.ParseUserInfo(content);
-
-            // Assert
-            action.Should().NotThrow();
+            // Act & Assert
+            _descendant.Invoking(x => x.ParseUserInfo(content)).Should().NotThrow();
         }
 
         [Test]

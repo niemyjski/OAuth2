@@ -85,10 +85,6 @@ namespace OAuth2.Client.Impl
             args.Request.AddParameter("application_key", _configuration.ClientPublic);
             args.Request.AddParameter("method", "users.getCurrentUser");
 
-            // workaround for current design, oauth_token is always present in URL, so we need emulate it for correct request signing
-            var fakeParam = new QueryParameter("oauth_token", AccessToken);
-            args.Request.AddParameter(fakeParam);
-
             // Signing.
             // Call API methods using access_token instead of session_key parameter
             // Calculate every request signature parameter sig using a little bit different way described in
@@ -97,9 +93,6 @@ namespace OAuth2.Client.Impl
             // Don't include access_token into request_params_composed_string
             string signature = String.Concat(args.Request.Parameters.OrderBy(x => x.Name).Select(x => String.Format("{0}={1}", x.Name, x.Value)).ToList());
             signature = (signature + (AccessToken + _configuration.ClientSecret).GetMd5Hash()).GetMd5Hash();
-
-            // Removing fake param to prevent dups
-            args.Request.Parameters.RemoveParameter(fakeParam);
 
             args.Request.AddParameter("access_token", AccessToken);
             args.Request.AddParameter("sig", signature);

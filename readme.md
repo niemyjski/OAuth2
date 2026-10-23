@@ -1,7 +1,6 @@
 # OAuth2
 
 [![Build](https://github.com/titarenko/OAuth2/workflows/Build/badge.svg)](https://github.com/titarenko/OAuth2/actions)
-[![CodeQL](https://github.com/titarenko/OAuth2/workflows/CodeQL/badge.svg)](https://github.com/titarenko/OAuth2/actions/workflows/codeql.yml)
 [![NuGet](https://img.shields.io/nuget/v/OAuth2.svg?style=flat)](https://www.nuget.org/packages/OAuth2/)
 
 OAuth2 is a library for user authentication using third-party services (OAuth/OAuth2 protocol) such as Google, Facebook and so on.
@@ -20,59 +19,56 @@ Install the [OAuth2 NuGet package](https://www.nuget.org/packages/OAuth2/):
 dotnet add package OAuth2
 ```
 
-## Usage Example (ASP.NET Core Minimal API)
+## Usage
+
+Create a client with your application's registered credentials and redirect URI:
 
 ```csharp
-using System.Collections.Specialized;
 using OAuth2.Client.Impl;
 using OAuth2.Configuration;
 using OAuth2.Infrastructure;
 
-var builder = WebApplication.CreateBuilder(args);
-var app = builder.Build();
-
-// Helper to create a GoogleClient instance
-GoogleClient CreateGoogleClient()
+var client = new GoogleClient(new RequestFactory(), new ClientConfiguration
 {
-    return new GoogleClient(new RequestFactory(), new ClientConfiguration
-    {
-        ClientId = app.Configuration["Google:ClientId"]!,
-        ClientSecret = app.Configuration["Google:ClientSecret"]!,
-        RedirectUri = "https://localhost:5001/auth/google/callback",
-        Scope = "profile email"
-    });
-}
-
-// Step 1: Redirect the user to Google's login page
-app.MapGet("/auth/google", async () =>
-{
-    var client = CreateGoogleClient();
-    var loginUri = await client.GetLoginLinkUriAsync();
-    return Results.Redirect(loginUri);
+    ClientId = "<client-id>",
+    ClientSecret = "<client-secret>",
+    RedirectUri = "https://localhost:5001/auth/google/callback",
+    Scope = "profile email"
 });
-
-// Step 2: Handle the callback after authentication
-app.MapGet("/auth/google/callback", async (HttpContext context) =>
-{
-    var code = context.Request.Query["code"].ToString();
-    if (string.IsNullOrEmpty(code))
-        return Results.BadRequest("Missing authorization code.");
-
-    var client = CreateGoogleClient();
-    var userInfo = await client.GetUserInfoAsync(new NameValueCollection { { "code", code } });
-
-    return Results.Ok(new
-    {
-        userInfo.Id,
-        userInfo.FirstName,
-        userInfo.LastName,
-        userInfo.Email,
-        AvatarUri = userInfo.AvatarUri?.ToString()
-    });
-});
-
-app.Run();
 ```
+
+Call `GetLoginLinkUriAsync(state)` to obtain the login URL. Your application must generate unpredictable, single-use state, bind it to the initiating browser session, and validate the returned value before exchanging the authorization code. After validation, pass the callback parameters as a `NameValueCollection` to `GetUserInfoAsync` to obtain a `UserInfo`.
+
+The library exposes callback state; it does not validate it, manage browser sessions, or validate ID tokens. Use a tested authentication handler or correlation store for those responsibilities. Create a client per authentication flow; do not share an instance concurrently. See [Google's authorization-code flow](https://developers.google.com/identity/protocols/oauth2/web-server).
+
+`RequestFactory` shares its HTTP transport across authentication flows. Each call to `CreateClient` returns a separate `RestClient`; headers, authenticators, and timeouts stay on that client. Disposing it leaves the shared transport available. On Windows, Linux, and macOS with .NET 8 or .NET 10, pooled connections expire after two minutes so new connections can refresh DNS. Mobile, browser, and netstandard2.0 builds retain their platform handler. Outside the browser, handler cookies are disabled so they do not cross authentication flows. RestSharp still handles explicit request cookies and same-origin redirects.
+
+The default transport rejects redirects to another scheme, host, or port before RestSharp can forward an OAuth form body or token-bearing query string. A provider that requires a redirect to another origin must use its documented endpoint directly or an application-owned `IRequestFactory` with an explicit redirect policy. Browser redirect behavior also depends on the browser's fetch implementation and CORS policy.
+
+Custom `IRequestFactory` implementations retain ownership of the clients and handlers they supply. Use an application-managed transport for custom DNS, proxy, certificate, or connection-lifetime requirements.
+
+Set `RequestOptions.Timeout` when constructing `RequestFactory` to change the response timeout. A request's `RestRequest.Timeout` takes precedence; otherwise the factory value applies, or RestSharp's 100-second default when neither is set. The shared `HttpClient` has no separate timeout because RestSharp enforces these limits and caller cancellation. An infinite HTTP transport timeout does not make requests unlimited by default.
+
+## Email verification
+
+`UserInfo.EmailVerified` is nullable: `true` and `false` preserve the provider's assertion; `null` means unknown or not mapped. Verification methods differ between providers. The following clients populate it:
+
+| Client | Source |
+|--------|--------|
+| Google | Boolean `email_verified` in [userinfo](https://developers.google.com/identity/openid-connect/reference). |
+| LinkedIn | Optional boolean `email_verified` in [`/v2/userinfo`](https://learn.microsoft.com/en-us/linkedin/consumer/integrations/self-serve/sign-in-with-linkedin-v2). |
+| Salesforce | Boolean `email_verified` in the existing [identity URL response](https://developer.salesforce.com/docs/platform/mobile-sdk/guide/oauth-using-identity-urls.html). |
+| GitHub | `verified` on the selected [`/user/emails`](https://docs.github.com/en/rest/users/emails#list-email-addresses-for-the-authenticated-user) record. A public profile email alone leaves verification unknown without adding a request. |
+
+Google, LinkedIn, and Salesforce accept only JSON booleans for verification; missing, null, or other types become `null`. GitHub retains its existing typed email parser and primary/verified/first-email selection order. Verification belongs to the selected address, not another address in the response.
+
+Google also maps a string `hd` to `UserInfo.ProviderData["hd"]`. Interpret this key only for `ProviderName == "Google"`. It is not a domain inferred from the email address or a universal tenant identifier. Other clients leave `ProviderData` null; raw responses and tokens are not copied into it.
+
+Look up a previously linked account by `ProviderName` and `UserInfo.Id`, not its email address. Email is mutable contact data and can be reassigned; successful OAuth authentication does not guarantee that the provider has verified the mailbox. For Google, `UserInfo.Id` contains `sub`, which [stays the same when an email address changes](https://developers.google.com/identity/openid-connect/reference#id-token). Update the contact email without changing that external-account key.
+
+Use `EmailVerified is true` when checking the provider's assertion; neither `false` nor `null` establishes verification. Even `true` alone does not authorize linking to an existing local account. Google can retain a verification assertion for an external email address after mailbox ownership changes. Apply an explicit linking policy using [Google's email-authority guidance](https://developers.google.com/identity/gsi/web/guides/verify-google-id-token). To restrict Google Workspace access, compare the returned `hd` claim with your allowed domain; an email suffix or the mere presence of `hd` is insufficient.
+
+Older `UserInfo` JSON deserializes with both new properties set to null. Default `System.Text.Json` serialization adds `EmailVerified` and `ProviderData`, including null values. Check consumers that require an exact JSON schema; naming and null-value settings remain under your application's control.
 
 ## Supported Services
 
@@ -82,9 +78,9 @@ app.Run();
 | Google | `GoogleClient` | Active | OAuth2 v2 / UserInfo v3 | `accounts.google.com/o/oauth2/v2/auth` | 2026-04-23 | [Docs](https://developers.google.com/identity/protocols/oauth2/web-server) |
 | Facebook | `FacebookClient` | Active | Graph API v25.0 | `www.facebook.com/v25.0/dialog/oauth` | 2026-04-23 | [Docs](https://developers.facebook.com/docs/facebook-login/guides/advanced/manual-flow) |
 | Microsoft | `MicrosoftClient` | Active | Identity Platform v2.0 / Graph v1.0 | `login.microsoftonline.com/common/oauth2/v2.0/authorize` | 2026-04-23 | [Docs](https://learn.microsoft.com/en-us/entra/identity-platform/v2-oauth2-auth-code-flow) |
-| Asana | `AsanaClient` | Active | API v1 | `app.asana.com/-/oauth_authorize` | 2026-04-23 | [Docs](https://developers.asana.com/docs/oauth) |
-| DigitalOcean | `DigitalOceanClient` | Active | OAuth 2.0 | `cloud.digitalocean.com/v1/oauth/authorize` | 2026-04-23 | [Docs](https://docs.digitalocean.com/reference/api/oauth-api/) |
-| ExactOnline | `ExactOnlineClient` | Active | REST API v1 | `start.exactonline.nl/api/oauth2/authorize` | 2026-04-23 | [Docs](https://developers.exactonline.com/) |
+| Asana | `AsanaClient` | Client expects legacy `id`; current API uses `gid` | API v1 | `app.asana.com/-/oauth_authorize` | 2026-10-23 (docs) | [Docs](https://developers.asana.com/docs/oauth) |
+| DigitalOcean | `DigitalOceanClient` | OAuth supported; client profile parser needs updating | OAuth 2.0 | `cloud.digitalocean.com/v1/oauth/authorize` | 2026-10-22 (docs) | [OAuth API](https://docs.digitalocean.com/reference/api/oauth/) |
+| ExactOnline | `ExactOnlineClient` | Client profile parser needs updating | REST API v1 | `start.exactonline.nl/api/oauth2/authorize` | 2026-10-23 (docs) | [Docs](https://developers.exactonline.com/) |
 | Fitbit | `FitbitClient` | Active | Web API v1 (user profile) | `www.fitbit.com/oauth2/authorize` | 2026-04-23 | [Docs](https://dev.fitbit.com/build/reference/web-api/authorization/) |
 | Foursquare | `FoursquareClient` | **Deprecated** | v2 (OAuth deprecated) | `foursquare.com/oauth2/authorize` | 2026-04-23 | [Docs](https://docs.foursquare.com/) |
 | LinkedIn | `LinkedInClient` | Active | OAuth v2 (OpenID Connect) | `www.linkedin.com/oauth/v2/authorization` | 2026-04-23 | [Docs](https://learn.microsoft.com/en-us/linkedin/consumer/integrations/self-serve/sign-in-with-linkedin-v2) |
@@ -95,12 +91,22 @@ app.Run();
 | Spotify | `SpotifyClient` | Active | Web API v1 | `accounts.spotify.com/authorize` | 2026-04-23 | [Docs](https://developer.spotify.com/documentation/web-api/tutorials/code-flow) |
 | Todoist | `TodoistClient` | Active | REST API v1 | `app.todoist.com/oauth/authorize` | 2026-04-23 | [Docs](https://developer.todoist.com/api/v1/) |
 | X (Twitter) | `XClient` | Active | OAuth 1.0a / API v1.1 | `api.twitter.com/oauth/authenticate` | 2026-04-23 | [Docs](https://developer.x.com/en/docs/authentication/oauth-1-0a) |
-| Uber | `UberClient` | Active | OAuth v2 | `auth.uber.com/oauth/v2/authorize` | 2026-04-23 | [Docs](https://developer.uber.com/docs/riders/guides/authentication/introduction) |
+| Uber | `UberClient` | Client uses deprecated `/v1/me`; current API is `/v3/me` | OAuth 2.0 / userinfo v1 (client), v3 (current) | `auth.uber.com/oauth/v2/authorize` | 2026-10-22 (docs) | [Current userinfo API](https://developer.uber.com/docs/consumer-identity/references/api/v3/me-get) |
 | VK (Vkontakte) | `VkClient` | Active | API v5.131 | `oauth.vk.com/authorize` | 2026-04-23 | [Docs](https://dev.vk.com/en/api/access-token/authcode-flow-user) |
 | VSTS (Azure DevOps) | `VSTSClient` | **Deprecated (2026)** | Azure DevOps OAuth (deprecated Apr 2025) | `app.vssps.visualstudio.com/oauth2/authorize` | 2026-04-23 | [Docs](https://learn.microsoft.com/en-us/azure/devops/integrate/get-started/authentication/azure-devops-oauth) |
 | Windows Live | `WindowsLiveClient` | **Legacy (Working)** | Live SDK v5.0 | `login.live.com/oauth20_authorize.srf` | 2026-04-23 | [Migration Guide](https://learn.microsoft.com/en-us/onedrive/developer/rest-api/concepts/migrating-from-live-sdk) |
-| Yahoo | `YahooClient` | Active | OAuth 2.0 | `api.login.yahoo.com/oauth2/request_auth` | 2026-04-23 | [Docs](https://developer.yahoo.com/oauth2/guide/) |
+| Yahoo | `YahooClient` | OAuth supported; client uses retired Social Directory profile API | OAuth 2.0 / Social Directory v1 (client) | `api.login.yahoo.com/oauth2/request_auth` | 2026-10-22 (docs) | [Sign In With Yahoo](https://developer.yahoo.com/sign-in-with-yahoo/) |
 | Yandex | `YandexClient` | Active | OAuth 2.0 (Yandex ID) | `oauth.yandex.ru/authorize` | 2026-04-23 | [Docs](https://yandex.com/dev/id/doc/en/codes/code-url) |
+
+Provider status and source checks do not establish that an authenticated login works. The claim mappings above do not change provider endpoints, scopes, or account identifiers. The existing clients have these migration requirements:
+
+- **Asana:** the client requests and reads `id`; the [current user schema](https://developers.asana.com/reference/users) uses `gid`. Check existing account identifiers before changing this mapping.
+- **ExactOnline:** the client reads root `id`, `display_name`, and `email`. The [current account flow](https://support.exactonline.com/community/s/article/All-All-DNO-Concept-appcenter-eol-appcenter-dev-integexec?language=en_GB) uses `UserID` and `FullName` from `Current/Me`. Validate its response shape and stored identifiers before updating the parser.
+- **DigitalOcean:** `/v1/oauth` is the current OAuth 2.0 route. The current token response supplies `info.uuid`, while the client expects root `uid`; updating the parser requires checking existing stored identifiers and team context.
+- **Uber:** the current `/v3/me` response uses `sub`, `given_name`, and `family_name` and requires an approved application with the `profile` scope. The client still parses `/v1/me`; replacing only its URL would leave the old response mapping in place.
+- **Yahoo:** OAuth 2.0 remains supported. The replacement for the retired Social Directory API is `/openid/v1/userinfo`, confirmed by [discovery](https://api.login.yahoo.com/.well-known/openid-configuration). Its [response format differs](https://developer.yahoo.com/oauth/social-directory-eol/), including `sub` in place of `guid`, so the migration needs scope and account-identity checks.
+
+Google retains its existing `/oauth2/v3/userinfo` route. Google's [current OIDC discovery](https://accounts.google.com/.well-known/openid-configuration) advertises `https://openidconnect.googleapis.com/v1/userinfo`; API path version numbers are distinct from OAuth protocol versions. Exposing the existing `email_verified` and `hd` claims does not require an endpoint migration.
 
 > **Removed providers** (Instagram, Xing): These providers' APIs have been retired or shut down. The client classes have been removed.
 > - **Instagram**: Basic Display API shut down Dec 4, 2024. There is no consumer OAuth replacement — the remaining Instagram APIs are business/creator-only. [Announcement](https://developers.facebook.com/blog/post/2024/09/04/update-on-instagram-basic-display-api/)

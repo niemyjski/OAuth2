@@ -1,3 +1,7 @@
+using System.Collections.Specialized;
+using System.Net.Http;
+using System.Threading.Tasks;
+using System.Web;
 using FluentAssertions;
 using NSubstitute;
 using NUnit.Framework;
@@ -6,6 +10,8 @@ using OAuth2.Client.Impl;
 using OAuth2.Configuration;
 using OAuth2.Infrastructure;
 using OAuth2.Models;
+using OAuth2.Tests.TestHelpers;
+using RestSharp;
 
 namespace OAuth2.Tests.Client.Impl
 {
@@ -62,6 +68,61 @@ namespace OAuth2.Tests.Client.Impl
             // assert
             endpoint.BaseUri.Should().Be("https://www.appsmail.ru");
             endpoint.Resource.Should().Be("/platform/api");
+        }
+
+        [Test]
+        public async Task GetUserInfoAsync_AuthorizationCode_SendsExpectedRequests()
+        {
+            // Arrange
+            using var handler = new MockHttpMessageHandler();
+            handler.EnqueueResponse(/* lang=json */ """{"access_token":"test-token"}""");
+            // Existing MailRu parser fixture shape, with synthetic profile values; tests transport, not live API availability.
+            handler.EnqueueResponse(/* lang=json */ """[{"uid":"12345","first_name":"Example","last_name":"User","email":"user@example.com","pic":"https://example.com/photo"}]""");
+            using var httpClient = new HttpClient(handler, disposeHandler: false);
+            using var tokenClient = new RestClient(httpClient, new RestClientOptions("https://connect.mail.ru"), disposeHttpClient: false);
+            using var userClient = new RestClient(httpClient, new RestClientOptions("https://www.appsmail.ru"), disposeHttpClient: false);
+            var factory = Substitute.For<IRequestFactory>();
+            factory.CreateClient("https://connect.mail.ru").Returns(tokenClient);
+            factory.CreateClient("https://www.appsmail.ru").Returns(userClient);
+            factory.CreateRequest(Arg.Any<string>(), Arg.Any<Method>()).Returns(call => new RestRequest(call.Arg<string>(), call.Arg<Method>()));
+            var client = new MailRuClient(factory, new ClientConfiguration
+            {
+                ClientId = "client-id", ClientSecret = "secret+&=", ClientPublic = "public-key",
+                RedirectUri = "https://app.example.com/callback?next=a&value=b"
+            });
+
+            // Act
+            var info = await client.GetUserInfoAsync(new NameValueCollection { { "code", "code+&=" } });
+
+            // Assert
+            handler.SentRequests.Should().HaveCount(2);
+            var tokenRequest = handler.SentRequests[0];
+            tokenRequest.Method.Should().Be(HttpMethod.Post);
+            tokenRequest.RequestUri!.AbsoluteUri.Should().Be("https://connect.mail.ru/oauth/token");
+            tokenRequest.Content!.Headers.ContentType!.MediaType.Should().Be("application/x-www-form-urlencoded");
+            var form = HttpUtility.ParseQueryString(handler.SentBodies[0]!);
+            form["code"].Should().Be("code+&=");
+            form["client_id"].Should().Be("client-id");
+            form["client_secret"].Should().Be("secret+&=");
+            form["grant_type"].Should().Be("authorization_code");
+            form["redirect_uri"].Should().Be("https://app.example.com/callback?next=a&value=b");
+            tokenRequest.Headers.Authorization.Should().BeNull();
+            var request = handler.SentRequests[1];
+            request.Method.Should().Be(HttpMethod.Get);
+            request.RequestUri!.GetLeftPart(System.UriPartial.Path).Should().Be("https://www.appsmail.ru/platform/api");
+            handler.SentBodies[1].Should().BeNullOrEmpty();
+            var query = HttpUtility.ParseQueryString(request.RequestUri.Query);
+            request.Headers.Authorization!.ToString().Should().Be("OAuth test-token");
+            query["access_token"].Should().BeNull();
+            query["oauth_token"].Should().BeNull();
+            query["client_secret"].Should().BeNull();
+            query["session_key"].Should().Be("test-token");
+            query["app_id"].Should().Be("client-id");
+            query["method"].Should().Be("users.getInfo");
+            query["secure"].Should().Be("1");
+            // Independent known-answer vector for https://api.mail.ru/docs/guides/restapi/
+            query["sig"].Should().Be("da97f2ef49bcb265d9ace5c986b48fa3");
+            info.Id.Should().Be("12345");
         }
 
         [Test]

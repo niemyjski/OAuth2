@@ -1,5 +1,9 @@
 using System;
+using System.Collections.Specialized;
+using System.Net.Http;
 using System.Text.Json;
+using System.Threading.Tasks;
+using System.Web;
 using FluentAssertions;
 using NSubstitute;
 using NUnit.Framework;
@@ -7,6 +11,8 @@ using OAuth2.Client.Impl;
 using OAuth2.Configuration;
 using OAuth2.Infrastructure;
 using OAuth2.Models;
+using OAuth2.Tests.TestHelpers;
+using RestSharp;
 
 namespace OAuth2.Tests.Serialization
 {
@@ -23,6 +29,54 @@ namespace OAuth2.Tests.Serialization
             _factory = Substitute.For<IRequestFactory>();
             _configuration = Substitute.For<IClientConfiguration>();
             _client = new TestableAsanaClient(_factory, _configuration);
+        }
+
+        [Test]
+        public async Task GetUserInfoAsync_AuthorizationCode_SendsExpectedRequests()
+        {
+            // Arrange
+            using var handler = new MockHttpMessageHandler();
+            handler.EnqueueResponse(/* lang=json */ """{"access_token":"test-token"}""");
+            // Existing Asana parser fixture shape, with synthetic profile values; tests transport, not live API availability.
+            handler.EnqueueResponse(/* lang=json */ """{"data":{"id":"12345","name":"Example User","email":"user@example.com"}}""");
+            using var httpClient = new HttpClient(handler, disposeHandler: false);
+            using var tokenClient = new RestClient(httpClient, new RestClientOptions("https://app.asana.com"), disposeHttpClient: false);
+            var factory = Substitute.For<IRequestFactory>();
+            factory.CreateClient("https://app.asana.com").Returns(tokenClient);
+            factory.CreateRequest(Arg.Any<string>(), Arg.Any<Method>()).Returns(call => new RestRequest(call.Arg<string>(), call.Arg<Method>()));
+            var client = new AsanaClient(factory, new ClientConfiguration
+            {
+                ClientId = "client-id", ClientSecret = "secret+&=", ClientPublic = "public-key",
+                RedirectUri = "https://app.example.com/callback?next=a&value=b"
+            });
+
+            // Act
+            var info = await client.GetUserInfoAsync(new NameValueCollection { { "code", "code+&=" } });
+
+            // Assert
+            handler.SentRequests.Should().HaveCount(2);
+            var tokenRequest = handler.SentRequests[0];
+            tokenRequest.Method.Should().Be(HttpMethod.Post);
+            tokenRequest.RequestUri!.AbsoluteUri.Should().Be("https://app.asana.com/-/oauth_token");
+            tokenRequest.Content!.Headers.ContentType!.MediaType.Should().Be("application/x-www-form-urlencoded");
+            var form = HttpUtility.ParseQueryString(handler.SentBodies[0]!);
+            form["code"].Should().Be("code+&=");
+            form["client_id"].Should().Be("client-id");
+            form["client_secret"].Should().Be("secret+&=");
+            form["grant_type"].Should().Be("authorization_code");
+            form["redirect_uri"].Should().Be("https://app.example.com/callback?next=a&value=b");
+            tokenRequest.Headers.Authorization.Should().BeNull();
+            var request = handler.SentRequests[1];
+            request.Method.Should().Be(HttpMethod.Get);
+            request.RequestUri!.GetLeftPart(System.UriPartial.Path).Should().Be("https://app.asana.com/api/1.0/users/me");
+            handler.SentBodies[1].Should().BeNullOrEmpty();
+            var query = HttpUtility.ParseQueryString(request.RequestUri.Query);
+            request.Headers.Authorization!.ToString().Should().Be("Bearer test-token");
+            query["access_token"].Should().BeNull();
+            query["oauth_token"].Should().BeNull();
+            query["client_secret"].Should().BeNull();
+            query["opt_fields"].Should().Be("id,name,photo.image_128x128,photo.image_60x60,photo.image_36x36,email");
+            info.Id.Should().Be("12345");
         }
 
         [Test]

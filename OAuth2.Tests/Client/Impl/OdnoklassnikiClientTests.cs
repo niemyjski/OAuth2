@@ -1,3 +1,7 @@
+using System.Collections.Specialized;
+using System.Net.Http;
+using System.Threading.Tasks;
+using System.Web;
 using FluentAssertions;
 using NSubstitute;
 using NUnit.Framework;
@@ -6,6 +10,8 @@ using OAuth2.Client.Impl;
 using OAuth2.Configuration;
 using OAuth2.Infrastructure;
 using OAuth2.Models;
+using OAuth2.Tests.TestHelpers;
+using RestSharp;
 
 namespace OAuth2.Tests.Client.Impl
 {
@@ -63,6 +69,57 @@ namespace OAuth2.Tests.Client.Impl
             // assert
             endpoint.BaseUri.Should().Be("https://api.odnoklassniki.ru");
             endpoint.Resource.Should().Be("/fb.do");
+        }
+
+        [Test]
+        public async Task GetUserInfoAsync_AuthorizationCode_SendsExpectedRequests()
+        {
+            // Arrange
+            using var handler = new MockHttpMessageHandler();
+            handler.EnqueueResponse(/* lang=json */ """{"access_token":"test-token"}""");
+            // Existing Odnoklassniki parser fixture shape, with synthetic profile values; tests transport, not live API availability.
+            handler.EnqueueResponse(/* lang=json */ """{"uid":"12345","first_name":"Example","last_name":"User","pic_1":"https://example.com/photo"}""");
+            using var httpClient = new HttpClient(handler, disposeHandler: false);
+            using var tokenClient = new RestClient(httpClient, new RestClientOptions("https://api.odnoklassniki.ru"), disposeHttpClient: false);
+            var factory = Substitute.For<IRequestFactory>();
+            factory.CreateClient("https://api.odnoklassniki.ru").Returns(tokenClient);
+            factory.CreateRequest(Arg.Any<string>(), Arg.Any<Method>()).Returns(call => new RestRequest(call.Arg<string>(), call.Arg<Method>()));
+            var client = new OdnoklassnikiClient(factory, new ClientConfiguration
+            {
+                ClientId = "client-id", ClientSecret = "secret+&=", ClientPublic = "public-key",
+                RedirectUri = "https://app.example.com/callback?next=a&value=b"
+            });
+
+            // Act
+            var info = await client.GetUserInfoAsync(new NameValueCollection { { "code", "code+&=" } });
+
+            // Assert
+            handler.SentRequests.Should().HaveCount(2);
+            var tokenRequest = handler.SentRequests[0];
+            tokenRequest.Method.Should().Be(HttpMethod.Post);
+            tokenRequest.RequestUri!.AbsoluteUri.Should().Be("https://api.odnoklassniki.ru/oauth/token.do");
+            tokenRequest.Content!.Headers.ContentType!.MediaType.Should().Be("application/x-www-form-urlencoded");
+            var form = HttpUtility.ParseQueryString(handler.SentBodies[0]!);
+            form["code"].Should().Be("code+&=");
+            form["client_id"].Should().Be("client-id");
+            form["client_secret"].Should().Be("secret+&=");
+            form["grant_type"].Should().Be("authorization_code");
+            form["redirect_uri"].Should().Be("https://app.example.com/callback?next=a&value=b");
+            tokenRequest.Headers.Authorization.Should().BeNull();
+            var request = handler.SentRequests[1];
+            request.Method.Should().Be(HttpMethod.Get);
+            request.RequestUri!.GetLeftPart(System.UriPartial.Path).Should().Be("https://api.odnoklassniki.ru/fb.do");
+            handler.SentBodies[1].Should().BeNullOrEmpty();
+            var query = HttpUtility.ParseQueryString(request.RequestUri.Query);
+            request.Headers.Authorization!.ToString().Should().Be("OAuth test-token");
+            query["oauth_token"].Should().BeNull();
+            query["client_secret"].Should().BeNull();
+            query["access_token"].Should().Be("test-token");
+            query["application_key"].Should().Be("public-key");
+            query["method"].Should().Be("users.getCurrentUser");
+            // Independent known-answer vector for https://apiok.ru/en/dev/methods/
+            query["sig"].Should().Be("60b6bc9f0640d4cefabc5a87a96af594");
+            info.Id.Should().Be("12345");
         }
 
         [Test]

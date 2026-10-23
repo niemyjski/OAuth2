@@ -76,9 +76,9 @@ Older `UserInfo` JSON deserializes with both new properties set to null. Default
 | Google | `GoogleClient` | Active | OAuth2 v2 / UserInfo v3 | `accounts.google.com/o/oauth2/v2/auth` | 2026-04-23 | [Docs](https://developers.google.com/identity/protocols/oauth2/web-server) |
 | Facebook | `FacebookClient` | Active | Graph API v25.0 | `www.facebook.com/v25.0/dialog/oauth` | 2026-04-23 | [Docs](https://developers.facebook.com/docs/facebook-login/guides/advanced/manual-flow) |
 | Microsoft | `MicrosoftClient` | Active | Identity Platform v2.0 / Graph v1.0 | `login.microsoftonline.com/common/oauth2/v2.0/authorize` | 2026-04-23 | [Docs](https://learn.microsoft.com/en-us/entra/identity-platform/v2-oauth2-auth-code-flow) |
-| Asana | `AsanaClient` | Active | API v1 | `app.asana.com/-/oauth_authorize` | 2026-04-23 | [Docs](https://developers.asana.com/docs/oauth) |
+| Asana | `AsanaClient` | Client expects legacy `id`; current API uses `gid` | API v1 | `app.asana.com/-/oauth_authorize` | 2026-10-23 (docs) | [Docs](https://developers.asana.com/docs/oauth) |
 | DigitalOcean | `DigitalOceanClient` | OAuth supported; client profile parser needs updating | OAuth 2.0 | `cloud.digitalocean.com/v1/oauth/authorize` | 2026-10-22 (docs) | [OAuth API](https://docs.digitalocean.com/reference/api/oauth/) |
-| ExactOnline | `ExactOnlineClient` | Active | REST API v1 | `start.exactonline.nl/api/oauth2/authorize` | 2026-04-23 | [Docs](https://developers.exactonline.com/) |
+| ExactOnline | `ExactOnlineClient` | Client profile parser needs updating | REST API v1 | `start.exactonline.nl/api/oauth2/authorize` | 2026-10-23 (docs) | [Docs](https://developers.exactonline.com/) |
 | Fitbit | `FitbitClient` | Active | Web API v1 (user profile) | `www.fitbit.com/oauth2/authorize` | 2026-04-23 | [Docs](https://dev.fitbit.com/build/reference/web-api/authorization/) |
 | Foursquare | `FoursquareClient` | **Deprecated** | v2 (OAuth deprecated) | `foursquare.com/oauth2/authorize` | 2026-04-23 | [Docs](https://docs.foursquare.com/) |
 | LinkedIn | `LinkedInClient` | Active | OAuth v2 (OpenID Connect) | `www.linkedin.com/oauth/v2/authorization` | 2026-04-23 | [Docs](https://learn.microsoft.com/en-us/linkedin/consumer/integrations/self-serve/sign-in-with-linkedin-v2) |
@@ -96,8 +96,10 @@ Older `UserInfo` JSON deserializes with both new properties set to null. Default
 | Yahoo | `YahooClient` | OAuth supported; client uses retired Social Directory profile API | OAuth 2.0 / Social Directory v1 (client) | `api.login.yahoo.com/oauth2/request_auth` | 2026-10-22 (docs) | [Sign In With Yahoo](https://developer.yahoo.com/sign-in-with-yahoo/) |
 | Yandex | `YandexClient` | Active | OAuth 2.0 (Yandex ID) | `oauth.yandex.ru/authorize` | 2026-04-23 | [Docs](https://yandex.com/dev/id/doc/en/codes/code-url) |
 
-The three `(docs)` entries record source/documentation checks, not authenticated logins. The claim mappings above do not change provider endpoints, scopes, or account identifiers. The existing clients have these migration requirements:
+Provider status and source checks do not establish that an authenticated login works. The claim mappings above do not change provider endpoints, scopes, or account identifiers. The existing clients have these migration requirements:
 
+- **Asana:** the client requests and reads `id`; the [current user schema](https://developers.asana.com/reference/users) uses `gid`. Check existing account identifiers before changing this mapping.
+- **ExactOnline:** the client reads root `id`, `display_name`, and `email`. The [current account flow](https://support.exactonline.com/community/s/article/All-All-DNO-Concept-appcenter-eol-appcenter-dev-integexec?language=en_GB) uses `UserID` and `FullName` from `Current/Me`. Validate its response shape and stored identifiers before updating the parser.
 - **DigitalOcean:** `/v1/oauth` is the current OAuth 2.0 route. The current token response supplies `info.uuid`, while the client expects root `uid`; updating the parser requires checking existing stored identifiers and team context.
 - **Uber:** the current `/v3/me` response uses `sub`, `given_name`, and `family_name` and requires an approved application with the `profile` scope. The client still parses `/v1/me`; replacing only its URL would leave the old response mapping in place.
 - **Yahoo:** OAuth 2.0 remains supported. The replacement for the retired Social Directory API is `/openid/v1/userinfo`, confirmed by [discovery](https://api.login.yahoo.com/.well-known/openid-configuration). Its [response format differs](https://developer.yahoo.com/oauth/social-directory-eol/), including `sub` in place of `guid`, so the migration needs scope and account-identity checks.

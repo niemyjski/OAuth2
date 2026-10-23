@@ -104,7 +104,7 @@ namespace OAuth2.Client.Impl
         protected override void BeforeGetUserInfo(BeforeAfterRequestArgs args)
         {
             args.Request.Authenticator = new OAuth2AuthorizationRequestHeaderAuthenticator(AccessToken!, BearerTokenType);
-            args.Request.Resource = String.Format(this.UserInfoServiceEndpoint.Resource, this._userProfileGUID);
+            args.Request.Resource = String.Format(args.Request.Resource, this._userProfileGUID);
         }
 
         /// <summary>

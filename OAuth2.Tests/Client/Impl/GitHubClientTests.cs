@@ -250,6 +250,7 @@ namespace OAuth2.Tests.Client.Impl
         {
             // Arrange
             var client = new CustomEmailGitHubClient(_factory, _configuration);
+            // The override changes verification while preserving the response's email address.
             EnqueuePrivateProfile(ProviderResponses.GitHubEmails);
             var parameters = new NameValueCollection { { "code", "code" } };
 
@@ -257,8 +258,9 @@ namespace OAuth2.Tests.Client.Impl
             var info = await client.GetUserInfoAsync(parameters);
 
             // Assert
-            info.Email.Should().Be("override@example.com");
+            info.Email.Should().Be("octocat@example.com");
             info.EmailVerified.Should().BeFalse();
+            _handler.SentRequests.Should().HaveCount(3);
         }
 
         [Test]
@@ -444,7 +446,11 @@ namespace OAuth2.Tests.Client.Impl
 
             protected override List<UserEmails> ParseEmailAddresses(string content)
             {
-                return new List<UserEmails> { new UserEmails { Email = "override@example.com", Primary = true, Verified = false } };
+                var emails = base.ParseEmailAddresses(content);
+                foreach (var email in emails)
+                    email.Verified = false;
+
+                return emails;
             }
         }
     }

@@ -24,6 +24,8 @@ namespace OAuth2.Client
     /// </remarks>
     public abstract class OAuth2Client : IClient
     {
+        internal const string BearerTokenType = "Bearer";
+
         private const string AccessTokenKey = "access_token";
         private const string RefreshTokenKey = "refresh_token";
         private const string ExpiresKey = "expires_in";

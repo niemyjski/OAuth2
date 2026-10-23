@@ -47,6 +47,8 @@ The default transport rejects redirects to another scheme, host, or port before 
 
 Custom `IRequestFactory` implementations retain ownership of the clients and handlers they supply. Use an application-managed transport for custom DNS, proxy, certificate, or connection-lifetime requirements.
 
+Set `RequestOptions.Timeout` when constructing `RequestFactory` to change the response timeout. A request's `RestRequest.Timeout` takes precedence; otherwise the factory value applies, or RestSharp's 100-second default when neither is set. The shared `HttpClient` has no separate timeout because RestSharp enforces these limits and caller cancellation. An infinite HTTP transport timeout does not make requests unlimited by default.
+
 ## Email verification
 
 `UserInfo.EmailVerified` is nullable: `true` and `false` preserve the provider's assertion; `null` means unknown or not mapped. Verification methods differ between providers. The following clients populate it:

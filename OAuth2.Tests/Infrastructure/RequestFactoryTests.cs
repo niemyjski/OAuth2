@@ -315,6 +315,33 @@ namespace OAuth2.Tests.Infrastructure
 
         [TestCase(false)]
         [TestCase(true)]
+        public async Task CreateClient_RequestTimeout_OverridesFactoryTimeout(bool infiniteFactoryTimeout)
+        {
+            // Arrange
+            using var listener = new TcpListener(IPAddress.Loopback, 0);
+            listener.Start();
+            using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            var accepted = listener.AcceptTcpClientAsync(deadline.Token);
+            var baseUrl = "http://127.0.0.1:" + ((IPEndPoint)listener.LocalEndpoint).Port;
+            var factory = new RequestFactory(new RequestOptions
+            {
+                Timeout = infiniteFactoryTimeout ? Timeout.InfiniteTimeSpan : TimeSpan.FromSeconds(30)
+            });
+            using var client = factory.CreateClient(baseUrl);
+            var request = new RestRequest("/pending") { Timeout = TimeSpan.FromSeconds(1) };
+
+            // Act
+            var pending = client.ExecuteAsync(request, deadline.Token);
+            using var connection = await accepted;
+            var response = await pending;
+
+            // Assert
+            response.ResponseStatus.Should().Be(ResponseStatus.TimedOut);
+            deadline.IsCancellationRequested.Should().BeFalse();
+        }
+
+        [TestCase(false)]
+        [TestCase(true)]
         public async Task CreateClient_SeparateWrappers_ReusesConnectionAndIsolatesCredentials(bool gzipResponse)
         {
             // Arrange
